@@ -90,7 +90,7 @@ describe('catalogue', () => {
     const list = await call('GET', '/v1/products?category=led-bulbs');
     expect(list.body.total).toBe(3);
     expect(list.body.items[0].inStock).toBe(true); // in-stock first
-    expect(list.body.facets.brands).toEqual([{ slug: 'philips', name: 'Philips', count: 3 }]);
+    expect(list.body.facets.brands).toEqual([{ slug: 'philips', name: 'Philips', logoUrl: null, count: 3 }]);
 
     const search = await call('GET', '/v1/products?q=led%20bulb');
     // the bulb named 'LED Bulb' first; the rest of the 'LED Bulbs' category after it

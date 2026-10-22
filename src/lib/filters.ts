@@ -23,13 +23,14 @@ export const SPEC_GROUPS = [
   { key: 'bulb', name: 'Bulb type', labels: ['bulb type', 'type of bulb', 'bulb base'] },
 ];
 
-export type FilterRow = { id: number; pricePaise: number; specs: Spec[]; brandSlug: string | null; brandName: string | null };
+export type FilterRow = { id: number; pricePaise: number; specs: Spec[]; brandSlug: string | null; brandName: string | null; brandLogo?: string | null };
 
 /** What the shopper ticked: brand slugs, price bucket keys, and per spec group the (normalised) values. */
 export type Picked = { brands: string[]; prices: string[]; specs: Record<string, string[]> };
 
 export type Facets = {
-  brands: { slug: string; name: string; count: number }[];
+  /** logoUrl: for the brand tiles on Home's category tabs */
+  brands: { slug: string; name: string; logoUrl: string | null; count: number }[];
   prices: { key: string; label: string; count: number }[];
   specs: { key: string; name: string; options: { value: string; label: string; count: number }[] }[];
 };
@@ -85,17 +86,17 @@ export function facetAndFilter(rows: FilterRow[], picked: Picked): { ids: number
   const entries = Object.entries(tests);
   const poolWithout = (skip: string | null) => rows.filter((r) => entries.every(([k, t]) => k === skip || t(r)));
 
-  const brandCounts = new Map<string, { slug: string; name: string; count: number }>();
+  const brandCounts = new Map<string, Facets['brands'][number]>();
   for (const r of poolWithout('brand')) {
     if (!r.brandSlug) continue;
-    const b = brandCounts.get(r.brandSlug) ?? { slug: r.brandSlug, name: r.brandName ?? r.brandSlug, count: 0 };
+    const b = brandCounts.get(r.brandSlug) ?? { slug: r.brandSlug, name: r.brandName ?? r.brandSlug, logoUrl: r.brandLogo ?? null, count: 0 };
     b.count++;
     brandCounts.set(r.brandSlug, b);
   }
   // a ticked brand stays listed (at 0) when other filters leave it with nothing
   for (const slug of picked.brands) {
     const r = brandCounts.has(slug) ? undefined : rows.find((x) => x.brandSlug === slug);
-    if (r) brandCounts.set(slug, { slug, name: r.brandName ?? slug, count: 0 });
+    if (r) brandCounts.set(slug, { slug, name: r.brandName ?? slug, logoUrl: r.brandLogo ?? null, count: 0 });
   }
 
   const pricePool = poolWithout('price');

@@ -401,6 +401,30 @@ export const returnRequests = pgTable('return_requests', {
   ...timestamps,
 });
 
+/**
+ * A customer's star rating (and optional words) for a product they had delivered: one per customer
+ * per product, changed by rating it again. products.rating_avg_x10 / rating_count are kept in step.
+ */
+export const productReviews = pgTable(
+  'product_reviews',
+  {
+    id: serial('id').primaryKey(),
+    productId: integer('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** the delivered order it was rated from */
+    orderId: integer('order_id').references(() => orders.id, { onDelete: 'set null' }),
+    /** 1 to 5 stars */
+    rating: integer('rating').notNull(),
+    comment: text('comment'),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex('product_reviews_user_product_uq').on(t.userId, t.productId), index('product_reviews_product_idx').on(t.productId)],
+);
+
 export const supportMessages = pgTable('support_messages', {
   id: serial('id').primaryKey(),
   userId: integer('user_id').references(() => users.id),

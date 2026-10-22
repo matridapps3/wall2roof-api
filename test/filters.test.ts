@@ -84,8 +84,8 @@ describe('product filters', () => {
     const all = await list('');
     expect(all.total).toBe(3);
     expect(all.facets.brands).toEqual([
-      { slug: 'philips', name: 'Philips', count: 2 },
-      { slug: 'wipro', name: 'Wipro', count: 1 },
+      { slug: 'philips', name: 'Philips', logoUrl: null, count: 2 },
+      { slug: 'wipro', name: 'Wipro', logoUrl: null, count: 1 },
     ]);
     // only ranges that have products
     expect(all.facets.prices).toEqual([
@@ -133,8 +133,8 @@ describe('product filters', () => {
     expect(none).toMatchObject({ items: [], total: 0 });
     // the ticked brand is still offered, at 0, so it can be unticked
     expect(none.facets.brands).toEqual([
-      { slug: 'philips', name: 'Philips', count: 2 },
-      { slug: 'wipro', name: 'Wipro', count: 0 },
+      { slug: 'philips', name: 'Philips', logoUrl: null, count: 2 },
+      { slug: 'wipro', name: 'Wipro', logoUrl: null, count: 0 },
     ]);
   });
 

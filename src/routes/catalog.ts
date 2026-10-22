@@ -8,6 +8,7 @@ import { HttpError, parse } from '../http.js';
 import { categoryMembers, inCategories, subtreeCount } from '../lib/categories.js';
 import { facetAndFilter, isFiltering, parsePicked } from '../lib/filters.js';
 import { htmlToText } from '../lib/html.js';
+import { reviewSummary } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
 
 const TAG_SKIP = /country|origin|warranty|dimension|size|brand|model|sku|hsn|weight|capacity|time|angle|lumen/i;
@@ -29,6 +30,15 @@ export function cardTags(specs: Spec[]): string[] {
   return [...new Set(values)].slice(0, 2);
 }
 
+/** "Top Rated" needs at least this many ratings, at this average or better (stored ×10). */
+const TOP_RATED = { minCount: 3, minAvgX10: 43 };
+
+/** The card's corner tag, like Blinkit's: "Top Rated" from customers' stars, else the admin's "Bestseller". */
+export function cardBadge(p: Pick<typeof products.$inferSelect, 'ratingAvg' | 'ratingCount' | 'isBestseller'>): 'Top Rated' | 'Bestseller' | null {
+  if (p.ratingCount >= TOP_RATED.minCount && (p.ratingAvg ?? 0) >= TOP_RATED.minAvgX10) return 'Top Rated';
+  return p.isBestseller ? 'Bestseller' : null;
+}
+
 /** Public product shape (cards, lists). */
 export function productCard(p: typeof products.$inferSelect, brand?: { name: string } | null) {
   const discountPct = p.mrpPaise > p.pricePaise ? Math.round(((p.mrpPaise - p.pricePaise) / p.mrpPaise) * 100) : 0;
@@ -48,6 +58,7 @@ export function productCard(p: typeof products.$inferSelect, brand?: { name: str
     discountPct,
     rating: p.ratingAvg != null ? p.ratingAvg / 10 : null,
     ratingCount: p.ratingCount,
+    badge: cardBadge(p),
     inStock: p.isActive && p.stockQty > 0,
     stockLeft: p.stockQty > 0 && p.stockQty <= 3 ? p.stockQty : null,
     maxPerOrder: Math.max(0, Math.min(p.maxPerOrder, p.stockQty)),
@@ -331,7 +342,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     // everything the category/search allows; the page itself is then fetched by id.
     const picked = parsePicked(q);
     const pool = await db
-      .select({ id: products.id, pricePaise: products.pricePaise, specs: products.specs, brandSlug: brands.slug, brandName: brands.name, categoryId: products.categoryId })
+      .select({ id: products.id, pricePaise: products.pricePaise, specs: products.specs, brandSlug: brands.slug, brandName: brands.name, brandLogo: brands.logoUrl, categoryId: products.categoryId })
       .from(products)
       .leftJoin(brands, eq(brands.id, products.brandId))
       .where(and(...conds));
@@ -420,7 +431,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
   });
 
   app.get('/v1/home', async () => {
-    const [best, cats, slides, sections] = await Promise.all([
+    const [best, cats, slides, sections, brandRows] = await Promise.all([
       db
         .select({ p: products, brandName: brands.name })
         .from(products)
@@ -448,12 +459,22 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         .orderBy(asc(banners.sort), asc(banners.id))
         .limit(10),
       homeSectionCards(db),
+      // "Shop by brand": brands with something to show, most products first
+      db
+        .select({ slug: brands.slug, name: brands.name, logoUrl: brands.logoUrl, count: sql<number>`count(*)::int` })
+        .from(products)
+        .innerJoin(brands, eq(brands.id, products.brandId))
+        .where(eq(products.isActive, true))
+        .groupBy(brands.id)
+        .orderBy(desc(sql`count(*)`), asc(brands.name))
+        .limit(12),
     ]);
     return {
       bestsellers: best.map((r) => productCard(r.p, r.brandName ? { name: r.brandName } : null)),
       categories: cats.map((c) => ({ slug: c.slug, name: c.name, imageUrl: c.imageUrl, tint: c.tint })),
       banners: await bannerCards(db, slides),
       sections,
+      brands: brandRows,
     };
   });
 
@@ -468,7 +489,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     if (!row) throw new HttpError(404, 'not_found', 'This product is no longer available.');
     const p = row.p;
 
-    const [variants, sameCategory, bought] = await Promise.all([
+    const [variants, sameCategory, bought, reviews] = await Promise.all([
       p.variantGroup
         ? db
             .select()
@@ -493,6 +514,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
             .limit(300)
         : Promise.resolve([]),
       alsoBought(db, p, 6),
+      reviewSummary(db, p.id),
     ]);
 
     // A fresh pick on every visit (like Home's bestsellers), six each: two rows of three, like Blinkit's.
@@ -538,6 +560,8 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
       /** "People also bought" */
       alsoBought: bought.map(card),
       brandsInCategory: [...brandCount.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+      /** "Ratings & reviews": the average, star counts and the latest reviews with words */
+      reviews,
     };
   });
 }

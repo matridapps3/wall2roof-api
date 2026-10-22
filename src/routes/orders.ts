@@ -1,15 +1,17 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type { Db } from '../db/client.js';
 import {
   addresses,
+  brands,
   cartItems,
   notifications,
   orderEvents,
   orderItems,
   orders,
+  productReviews,
   products,
   returnRequests,
   type AddressFields,
@@ -18,7 +20,9 @@ import { HttpError, parse, requireAdmin, requireUser } from '../http.js';
 import { categoriesOf } from '../lib/categories.js';
 import { findCoupon, isFirstOrder } from '../lib/checkout.js';
 import { quote } from '../lib/pricing.js';
+import { ratingsBy, refreshProductRatings } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
+import { productCard } from './catalog.js';
 
 type OrderRow = typeof orders.$inferSelect;
 type Status = OrderRow['status'];
@@ -39,7 +43,15 @@ export function orderNumber(id: number, at = new Date()): string {
   return `ED-${at.getFullYear()}-${String(10000 + id)}`;
 }
 
-function summary(o: OrderRow, items: (typeof orderItems.$inferSelect)[], deliveredAt: Date | null) {
+type MyRatings = Map<number, { rating: number; comment: string | null }>;
+
+/** The customer's average stars over this order's items they rated (null until they rate one). */
+function orderRating(items: (typeof orderItems.$inferSelect)[], mine: MyRatings) {
+  const stars = items.flatMap((i) => (i.productId != null && mine.has(i.productId) ? [mine.get(i.productId)!.rating] : []));
+  return stars.length ? Math.round((stars.reduce((a, b) => a + b, 0) / stars.length) * 10) / 10 : null;
+}
+
+function summary(o: OrderRow, items: (typeof orderItems.$inferSelect)[], deliveredAt: Date | null, mine: MyRatings) {
   return {
     number: o.number,
     status: o.status,
@@ -52,6 +64,10 @@ function summary(o: OrderRow, items: (typeof orderItems.$inferSelect)[], deliver
     preview: items.slice(0, 6).map((i) => ({ name: i.name, image: i.image, qty: i.qty })),
     /** when it was delivered, for Blinkit's 'Arrived in 1 hr 20 mins' */
     deliveredAt: deliveredAt?.toISOString() ?? null,
+    /** Blinkit's "Rate order": only delivered orders can be rated */
+    canRate: o.status === 'delivered',
+    /** the customer's average stars for this order's items (null until rated) */
+    myRating: orderRating(items, mine),
   };
 }
 
@@ -71,13 +87,14 @@ async function detail(db: Db, o: OrderRow) {
   const deliveredAt = events.find((e) => e.status === 'delivered')?.createdAt ?? null;
   // the product's pack size ("2 ltr", "Pack of 2") for "2 ltr x 1" on the order page
   const productIds = items.flatMap((i) => (i.productId == null ? [] : [i.productId]));
+  const mine = await ratingsBy(db, o.userId, productIds);
   const units = productIds.length
     ? new Map(
         (await db.select({ id: products.id, label: products.variantLabel }).from(products).where(inArray(products.id, productIds))).map((p) => [p.id, p.label]),
       )
     : new Map<number, string | null>();
   return {
-    ...summary(o, items, deliveredAt),
+    ...summary(o, items, deliveredAt, mine),
     address: o.address,
     deliveryInstructions: o.deliveryInstructions,
     items: items.map((i) => {
@@ -95,6 +112,9 @@ async function detail(db: Db, o: OrderRow) {
         returnable: i.returnable,
         returnWindowEndsAt: windowEnds?.toISOString() ?? null,
         canReturn: !!windowEnds && windowEnds.getTime() > Date.now(),
+        /** the customer's stars and words for this product (null until rated) */
+        myRating: (i.productId != null ? mine.get(i.productId)?.rating : null) ?? null,
+        myComment: (i.productId != null ? mine.get(i.productId)?.comment : null) ?? null,
       };
     }),
     bill: {
@@ -311,7 +331,38 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
           .where(and(inArray(orderEvents.orderId, list.map((o) => o.id)), eq(orderEvents.status, 'delivered')))
       : [];
     const deliveredAt = new Map(delivered.map((e) => [e.orderId, e.at]));
-    return { orders: list.map((o) => summary(o, items.filter((i) => i.orderId === o.id), deliveredAt.get(o.id) ?? null)) };
+    const mine = await ratingsBy(db, userId, [...new Set(items.flatMap((i) => (i.productId == null ? [] : [i.productId])))]);
+    return { orders: list.map((o) => summary(o, items.filter((i) => i.orderId === o.id), deliveredAt.get(o.id) ?? null, mine)) };
+  });
+
+  /**
+   * Blinkit's "Buy again": what the customer ordered before (cancelled orders left out), most
+   * recently ordered first, as product cards at today's price.
+   */
+  app.get('/v1/me/buy-again', async (req) => {
+    const userId = requireUser(req);
+    const recent = await db
+      .select({ id: orderItems.productId, last: sql<string>`max(${orders.createdAt})` })
+      .from(orderItems)
+      .innerJoin(orders, eq(orders.id, orderItems.orderId))
+      .where(and(eq(orders.userId, userId), ne(orders.status, 'cancelled'), isNotNull(orderItems.productId)))
+      .groupBy(orderItems.productId)
+      .orderBy(desc(sql`max(${orders.createdAt})`))
+      .limit(30);
+    const ids = recent.flatMap((r) => (r.id == null ? [] : [r.id]));
+    if (!ids.length) return { items: [] };
+    const rank = new Map(ids.map((id, i) => [id, i]));
+    const rows = await db
+      .select({ p: products, brandName: brands.name })
+      .from(products)
+      .leftJoin(brands, eq(brands.id, products.brandId))
+      .where(and(inArray(products.id, ids), eq(products.isActive, true)));
+    return {
+      items: rows
+        .sort((a, b) => rank.get(a.p.id)! - rank.get(b.p.id)!)
+        .slice(0, 12)
+        .map((r) => productCard(r.p, r.brandName ? { name: r.brandName } : null)),
+    };
   });
 
   app.get('/v1/orders/:number', async (req) => {
@@ -330,6 +381,45 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
     }
     await cancelOrder(db, o, reason);
     return detail(db, (await db.select().from(orders).where(eq(orders.id, o.id)))[0]);
+  });
+
+  /**
+   * Blinkit's "Rate order": stars (1–5) and optional words for the items of a delivered order. Rating
+   * a product again (from this or another order) replaces the customer's earlier rating of it.
+   */
+  app.post('/v1/orders/:number/ratings', async (req) => {
+    const userId = requireUser(req);
+    const { number } = parse(z.object({ number: z.string().max(40) }), req.params);
+    const body = parse(
+      z.object({
+        ratings: z
+          .array(z.object({ productId: z.number().int().positive(), rating: z.number().int().min(1).max(5), comment: z.string().trim().max(500).nullish() }))
+          .min(1)
+          .max(50),
+      }),
+      req.body,
+    );
+    const o = await loadOrder(db, userId, number);
+    if (o.status !== 'delivered') throw new HttpError(409, 'not_delivered', 'You can rate an order once it’s delivered.');
+    const items = await db.select({ productId: orderItems.productId }).from(orderItems).where(eq(orderItems.orderId, o.id));
+    const inOrder = new Set(items.flatMap((i) => (i.productId == null ? [] : [i.productId])));
+    for (const r of body.ratings) {
+      if (!inOrder.has(r.productId)) throw new HttpError(400, 'invalid_item', 'That item isn’t part of this order.');
+    }
+    await db.transaction(async (tx) => {
+      for (const r of body.ratings) {
+        const comment = r.comment ? r.comment : null;
+        await tx
+          .insert(productReviews)
+          .values({ productId: r.productId, userId, orderId: o.id, rating: r.rating, comment })
+          .onConflictDoUpdate({
+            target: [productReviews.userId, productReviews.productId],
+            set: { rating: r.rating, comment, orderId: o.id, updatedAt: new Date() },
+          });
+      }
+    });
+    await refreshProductRatings(db, [...new Set(body.ratings.map((r) => r.productId))]);
+    return detail(db, o);
   });
 
   app.post('/v1/orders/:number/returns', async (req, reply) => {
