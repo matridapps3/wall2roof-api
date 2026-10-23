@@ -17,11 +17,13 @@ import {
   type AddressFields,
 } from '../db/schema.js';
 import { HttpError, parse, requireAdmin, requireUser } from '../http.js';
+import { normalizeIndianMobile } from '../lib/auth.js';
 import { categoriesOf } from '../lib/categories.js';
 import { findCoupon, isFirstOrder } from '../lib/checkout.js';
-import { quote } from '../lib/pricing.js';
+import { MAX_TIP_PAISE, quote } from '../lib/pricing.js';
 import { ratingsForOrders, refreshProductRatings, type OrderRatings } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
+import { VOICE_ID_RE, type VoiceStore } from '../lib/voice.js';
 import { productCard } from './catalog.js';
 
 type OrderRow = typeof orders.$inferSelect;
@@ -127,8 +129,13 @@ async function detail(db: Db, o: OrderRow) {
       codFeePaise: o.codFeePaise,
       discountPaise: o.discountPaise,
       couponCode: o.couponCode,
+      tipPaise: o.tipPaise,
       totalPaise: o.totalPaise,
     },
+    /** "Add GSTIN" (null when none was added) */
+    gst: o.gstin ? { gstin: o.gstin, businessName: o.gstBusinessName } : null,
+    /** the recorded instruction's address on this server, e.g. /voice/12/<id>.m4a (null when none) */
+    voiceNote: o.voiceNote ? `/voice/${o.voiceNote}` : null,
     timeline: events.map((e) => ({ status: e.status, at: e.createdAt.toISOString(), note: e.note })),
     canCancel: CANCELLABLE.includes(o.status),
     cancelReason: o.cancelReason,
@@ -145,7 +152,10 @@ const STATUS_COPY: Record<Status, string> = {
   cancelled: 'Order cancelled',
 };
 
-export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
+/** A GST number: state code, PAN, entity number, "Z", check character. */
+export const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+export async function orderRoutes(app: FastifyInstance, { db, voice }: { db: Db; voice: VoiceStore }) {
   app.post('/v1/orders', async (req, reply) => {
     const userId = requireUser(req);
     const body = parse(
@@ -154,6 +164,20 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
         couponCode: z.string().trim().max(40).nullish(),
         paymentMethod: z.enum(['cod', 'online']),
         instructions: z.array(z.string().max(60)).max(5).default([]),
+        /** "Tip your delivery partner" */
+        tipPaise: z.number().int().min(0).max(MAX_TIP_PAISE).default(0),
+        /** "Add GSTIN" */
+        gstin: z
+          .string()
+          .trim()
+          .transform((v) => v.toUpperCase())
+          .refine((v) => GSTIN_RE.test(v), 'Enter a valid 15-character GSTIN')
+          .nullish(),
+        gstBusinessName: z.string().trim().min(2, 'Enter the business name').max(120).nullish(),
+        /** "Ordering for someone else?": who receives this order (the saved address is left as it is) */
+        receiver: z.object({ name: z.string().trim().min(1, 'Enter the receiver’s name').max(80), phone: z.string().max(20) }).nullish(),
+        /** a recording uploaded to /v1/voice-notes */
+        voiceNoteId: z.string().regex(VOICE_ID_RE).nullish(),
         idempotencyKey: z.string().min(8).max(80),
       }),
       req.body,
@@ -180,6 +204,13 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
     if (!addr) throw new HttpError(400, 'invalid_address', 'Choose a delivery address.');
     if (!isServiceable(settings, addr.pincode)) {
       throw new HttpError(400, 'not_serviceable', `We don’t deliver to ${addr.pincode} yet.`);
+    }
+
+    if (body.gstin && !body.gstBusinessName) throw new HttpError(400, 'invalid_gstin', 'Enter the business name for this GSTIN.');
+    const receiverPhone = body.receiver ? normalizeIndianMobile(body.receiver.phone) : null;
+    if (body.receiver && !receiverPhone) throw new HttpError(400, 'invalid_receiver', 'Enter the receiver’s 10-digit mobile number.');
+    if (body.voiceNoteId && !(await voice.has(userId, body.voiceNoteId))) {
+      throw new HttpError(400, 'invalid_voice_note', 'Your voice instruction didn’t upload. Record it again.');
     }
 
     const coupon = await findCoupon(db, body.couponCode);
@@ -212,6 +243,7 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
         unknownCouponCode: body.couponCode && !coupon ? body.couponCode : null,
         paymentMethod: body.paymentMethod,
         isFirstOrder: first,
+        tipPaise: body.tipPaise,
       });
       if (q.blocking || lines.length !== cart.length) {
         throw new HttpError(409, 'cart_changed', 'Some items in your cart changed. Review your cart and try again.', q);
@@ -223,8 +255,8 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
       const address: AddressFields = {
         label: addr.label,
         otherLabel: addr.otherLabel,
-        name: addr.name,
-        phone: addr.phone,
+        name: body.receiver ? body.receiver.name : addr.name,
+        phone: receiverPhone ?? addr.phone,
         line1: addr.line1,
         line2: addr.line2,
         landmark: addr.landmark,
@@ -252,6 +284,10 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
           paymentMethod: body.paymentMethod,
           paymentStatus: body.paymentMethod === 'cod' ? 'cod_due' : 'pending',
           idempotencyKey: body.idempotencyKey,
+          tipPaise: q.tipPaise,
+          gstin: body.gstin ?? null,
+          gstBusinessName: body.gstin ? (body.gstBusinessName ?? null) : null,
+          voiceNote: body.voiceNoteId ? voice.key(userId, body.voiceNoteId) : null,
         })
         .returning();
       const [numbered] = await tx

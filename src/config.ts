@@ -73,6 +73,8 @@ export const config = {
   ...env,
   imagesDir: env.IMAGES_DIR ?? (env.RAILWAY_VOLUME_MOUNT_PATH ? join(env.RAILWAY_VOLUME_MOUNT_PATH, 'images') : './.data/images'),
   imagesPersistent,
+  /** Recorded delivery instructions, next to the images (the Railway volume in production). */
+  voiceDir: env.RAILWAY_VOLUME_MOUNT_PATH ? join(env.RAILWAY_VOLUME_MOUNT_PATH, 'voice') : './.data/voice',
   publicUrl,
   /**
    * Copy outside images only where the copies are kept (a volume) and reachable (a public https

@@ -41,7 +41,7 @@ export type PricedCart = Quote & {
  */
 export async function priceCart(
   db: Db,
-  opts: { userId: number | null; lines: CartLineInput[]; couponCode?: string | null; paymentMethod?: 'cod' | 'online' | null },
+  opts: { userId: number | null; lines: CartLineInput[]; couponCode?: string | null; paymentMethod?: 'cod' | 'online' | null; tipPaise?: number },
 ): Promise<PricedCart> {
   const lines = normalizeLines(opts.lines);
   const ids = lines.map((l) => l.productId);
@@ -78,6 +78,7 @@ export async function priceCart(
     coupon,
     unknownCouponCode: opts.couponCode && !coupon ? opts.couponCode.trim().toUpperCase() : null,
     paymentMethod: opts.paymentMethod ?? null,
+    tipPaise: opts.tipPaise ?? 0,
     isFirstOrder: first,
   });
 

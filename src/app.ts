@@ -5,6 +5,7 @@ import { config } from './config.js';
 import type { Db } from './db/client.js';
 import { HttpError, readAuth, sendError } from './http.js';
 import { ImageStore } from './lib/images.js';
+import { VoiceStore } from './lib/voice.js';
 import { isTestLogin } from './lib/otp-sender.js';
 import { getSettings } from './lib/settings.js';
 import { accountRoutes } from './routes/account.js';
@@ -14,12 +15,15 @@ import { catalogRoutes } from './routes/catalog.js';
 import { imageRoutes } from './routes/images.js';
 import { integrationRoutes } from './routes/integration.js';
 import { orderRoutes } from './routes/orders.js';
+import { voiceRoutes } from './routes/voice.js';
 
 export type AppDeps = {
   /** Wall2Roof admin integration key; defaults to WALL2ROOF_ADMIN_KEY. */
   integrationKey?: string | null;
   /** The server's own image copies; defaults to IMAGES_DIR / the Railway volume. */
   images?: ImageStore;
+  /** Recorded delivery instructions; defaults to the voice folder on the Railway volume. */
+  voice?: VoiceStore;
 };
 
 export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: AppDeps = {}) {
@@ -70,7 +74,9 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
   await catalogRoutes(app, { db });
   await authRoutes(app, { db });
   await cartRoutes(app, { db });
-  await orderRoutes(app, { db });
+  const voice = deps.voice ?? new VoiceStore(config.voiceDir);
+  await voiceRoutes(app, { store: voice });
+  await orderRoutes(app, { db, voice });
   await accountRoutes(app, { db });
   await integrationRoutes(app, { db, key: 'integrationKey' in deps ? deps.integrationKey : config.WALL2ROOF_ADMIN_KEY });
 

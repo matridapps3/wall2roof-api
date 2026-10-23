@@ -7,13 +7,15 @@ import { cartItems, coupons, products } from '../db/schema.js';
 import { HttpError, parse, requireUser } from '../http.js';
 import { categoriesOf } from '../lib/categories.js';
 import { isFirstOrder, normalizeLines, priceCart } from '../lib/checkout.js';
-import { evaluateCoupon } from '../lib/pricing.js';
+import { evaluateCoupon, MAX_TIP_PAISE } from '../lib/pricing.js';
 
 const line = z.object({ productId: z.number().int().positive(), qty: z.number().int().min(0).max(99) });
 const quoteBody = z.object({
   items: z.array(line).max(100),
   couponCode: z.string().trim().max(40).nullish(),
   paymentMethod: z.enum(['cod', 'online']).nullish(),
+  /** "Tip your delivery partner", up to ₹500 */
+  tipPaise: z.number().int().min(0).max(MAX_TIP_PAISE).default(0),
 });
 
 async function serverCart(db: Db, userId: number) {
@@ -30,7 +32,7 @@ export async function cartRoutes(app: FastifyInstance, { db }: { db: Db }) {
   app.post('/v1/cart/quote', async (req) => {
     const body = parse(quoteBody, req.body);
     const userId = req.auth ? Number(req.auth.sub) : null;
-    return priceCart(db, { userId, lines: body.items, couponCode: body.couponCode, paymentMethod: body.paymentMethod });
+    return priceCart(db, { userId, lines: body.items, couponCode: body.couponCode, paymentMethod: body.paymentMethod, tipPaise: body.tipPaise });
   });
 
   app.get('/v1/cart', async (req) => {

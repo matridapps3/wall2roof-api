@@ -327,6 +327,8 @@ export const orders = pgTable(
     handlingFeePaise: integer('handling_fee_paise').notNull(),
     codFeePaise: integer('cod_fee_paise').notNull().default(0),
     discountPaise: integer('discount_paise').notNull().default(0),
+    /** "Tip your delivery partner": all of it goes to the partner; included in total_paise. */
+    tipPaise: integer('tip_paise').notNull().default(0),
     totalPaise: integer('total_paise').notNull(),
     couponCode: text('coupon_code'),
     paymentMethod: text('payment_method', { enum: ['cod', 'online'] }).notNull(),
@@ -335,6 +337,11 @@ export const orders = pgTable(
     /** Sent by the app; a repeated submit returns the same order instead of a duplicate. */
     idempotencyKey: text('idempotency_key').notNull(),
     cancelReason: text('cancel_reason'),
+    /** "Add GSTIN": the business's GST number and name, for GST input credit on the invoice. */
+    gstin: text('gstin'),
+    gstBusinessName: text('gst_business_name'),
+    /** A recorded voice instruction for the delivery partner: "<userId>/<name>" under the voice folder. */
+    voiceNote: text('voice_note'),
     ...timestamps,
   },
   (t) => [

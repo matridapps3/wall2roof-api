@@ -65,6 +65,8 @@ export type Quote = {
   handlingFeePaise: number;
   codFeePaise: number;
   discountPaise: number;
+  /** The delivery partner's tip, included in the total. */
+  tipPaise: number;
   totalPaise: number;
   /** MRP savings + coupon discount + waived delivery. */
   savingsPaise: number;
@@ -72,6 +74,9 @@ export type Quote = {
   /** Lines with problems; checkout is blocked while any exist. */
   blocking: boolean;
 };
+
+/** The most a customer can tip (₹500). */
+export const MAX_TIP_PAISE = 50_000;
 
 export function rupees(paise: number): string {
   return `₹${(paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
@@ -134,6 +139,8 @@ export function quote(input: {
   /** Code the customer typed that matched no coupon. */
   unknownCouponCode?: string | null;
   paymentMethod?: 'cod' | 'online' | null;
+  /** "Tip your delivery partner" (paise); ignored for an empty cart. */
+  tipPaise?: number;
   isFirstOrder: boolean;
   now?: Date;
 }): Quote {
@@ -170,7 +177,8 @@ export function quote(input: {
   const handlingFee = empty ? 0 : input.fees.handlingFeePaise;
   const codFee = !empty && input.paymentMethod === 'cod' ? input.fees.codFeePaise : 0;
   const discount = coupon?.applied ? Math.min(coupon.discountPaise, subtotal) : 0;
-  const total = subtotal - discount + deliveryFee + handlingFee + codFee;
+  const tip = empty ? 0 : Math.max(0, Math.round(input.tipPaise ?? 0));
+  const total = subtotal - discount + deliveryFee + handlingFee + codFee + tip;
 
   return {
     lines,
@@ -182,6 +190,7 @@ export function quote(input: {
     handlingFeePaise: handlingFee,
     codFeePaise: codFee,
     discountPaise: discount,
+    tipPaise: tip,
     totalPaise: total,
     savingsPaise: mrpTotal - subtotal + discount + (deliveryBefore - deliveryFee),
     coupon,
