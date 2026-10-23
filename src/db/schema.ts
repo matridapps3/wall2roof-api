@@ -402,8 +402,9 @@ export const returnRequests = pgTable('return_requests', {
 });
 
 /**
- * A customer's star rating (and optional words) for a product they had delivered: one per customer
- * per product, changed by rating it again. products.rating_avg_x10 / rating_count are kept in step.
+ * A customer's star rating (and optional words) for a product from one delivered order: each order is
+ * rated on its own (rating it again changes that order's rating). A product's stars count each
+ * customer once, by their latest rating; products.rating_avg_x10 / rating_count are kept in step.
  */
 export const productReviews = pgTable(
   'product_reviews',
@@ -422,7 +423,7 @@ export const productReviews = pgTable(
     comment: text('comment'),
     ...timestamps,
   },
-  (t) => [uniqueIndex('product_reviews_user_product_uq').on(t.userId, t.productId), index('product_reviews_product_idx').on(t.productId)],
+  (t) => [uniqueIndex('product_reviews_user_product_order_uq').on(t.userId, t.productId, t.orderId), index('product_reviews_product_idx').on(t.productId)],
 );
 
 export const supportMessages = pgTable('support_messages', {

@@ -14,6 +14,22 @@ export function inCategories(db: Db, ids: number[]): SQL {
   )!;
 }
 
+const ELECTRICAL = /wire|cable|switch|socket|\bmcb|fuse|breaker|extension|plug|adapter|charger|\btools?\b|tester|conduit|\btape/i;
+const LIGHTING = /light|lamp|bulb|chandelier|strip|tube|batten|downlight|\bpanel|\bled\b|spot/i;
+
+/**
+ * The broad kind of a category, from its name (or its parent's): wires and switches are "electrical",
+ * anything that lights up is "lighting". Used to fill "People also bought" with related products.
+ */
+export function categoryKind(...names: (string | null | undefined)[]): 'electrical' | 'lighting' | null {
+  for (const n of names) {
+    if (!n) continue;
+    if (ELECTRICAL.test(n)) return 'electrical';
+    if (LIGHTING.test(n)) return 'lighting';
+  }
+  return null;
+}
+
 /** Active products per category id (main and extra categories), as sets so nothing is counted twice. */
 export async function categoryMembers(db: Db): Promise<Map<number, Set<number>>> {
   const [main, extra] = await Promise.all([

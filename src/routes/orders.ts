@@ -20,7 +20,7 @@ import { HttpError, parse, requireAdmin, requireUser } from '../http.js';
 import { categoriesOf } from '../lib/categories.js';
 import { findCoupon, isFirstOrder } from '../lib/checkout.js';
 import { quote } from '../lib/pricing.js';
-import { ratingsBy, refreshProductRatings } from '../lib/reviews.js';
+import { ratingsForOrders, refreshProductRatings, type OrderRatings } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
 import { productCard } from './catalog.js';
 
@@ -43,15 +43,13 @@ export function orderNumber(id: number, at = new Date()): string {
   return `ED-${at.getFullYear()}-${String(10000 + id)}`;
 }
 
-type MyRatings = Map<number, { rating: number; comment: string | null }>;
-
 /** The customer's average stars over this order's items they rated (null until they rate one). */
-function orderRating(items: (typeof orderItems.$inferSelect)[], mine: MyRatings) {
+function orderRating(items: (typeof orderItems.$inferSelect)[], mine: OrderRatings) {
   const stars = items.flatMap((i) => (i.productId != null && mine.has(i.productId) ? [mine.get(i.productId)!.rating] : []));
   return stars.length ? Math.round((stars.reduce((a, b) => a + b, 0) / stars.length) * 10) / 10 : null;
 }
 
-function summary(o: OrderRow, items: (typeof orderItems.$inferSelect)[], deliveredAt: Date | null, mine: MyRatings) {
+function summary(o: OrderRow, items: (typeof orderItems.$inferSelect)[], deliveredAt: Date | null, mine: OrderRatings) {
   return {
     number: o.number,
     status: o.status,
@@ -85,14 +83,16 @@ async function detail(db: Db, o: OrderRow) {
     db.select().from(returnRequests).where(eq(returnRequests.orderId, o.id)),
   ]);
   const deliveredAt = events.find((e) => e.status === 'delivered')?.createdAt ?? null;
-  // the product's pack size ("2 ltr", "Pack of 2") for "2 ltr x 1" on the order page
+  // the product's pack size ("2 ltr", "Pack of 2") for "2 ltr x 1" on the order page, and its page, which
+  // tapping the item opens (null when the product is gone or hidden)
   const productIds = items.flatMap((i) => (i.productId == null ? [] : [i.productId]));
-  const mine = await ratingsBy(db, o.userId, productIds);
-  const units = productIds.length
+  // what the customer gave this order (rating the same product from another order doesn't count here)
+  const mine: OrderRatings = (await ratingsForOrders(db, o.userId, [o.id])).get(o.id) ?? new Map();
+  const found = productIds.length
     ? new Map(
-        (await db.select({ id: products.id, label: products.variantLabel }).from(products).where(inArray(products.id, productIds))).map((p) => [p.id, p.label]),
+        (await db.select({ id: products.id, label: products.variantLabel, slug: products.slug, isActive: products.isActive }).from(products).where(inArray(products.id, productIds))).map((p) => [p.id, p]),
       )
-    : new Map<number, string | null>();
+    : new Map<number, { label: string | null; slug: string; isActive: boolean }>();
   return {
     ...summary(o, items, deliveredAt, mine),
     address: o.address,
@@ -105,7 +105,9 @@ async function detail(db: Db, o: OrderRow) {
         sku: i.sku,
         name: i.name,
         image: i.image,
-        unitLabel: (i.productId != null ? units.get(i.productId) : null) ?? null,
+        unitLabel: (i.productId != null ? found.get(i.productId)?.label : null) ?? null,
+        /** the product page to open from the order (null when the product is gone or hidden) */
+        slug: (i.productId != null && found.get(i.productId)?.isActive ? found.get(i.productId)?.slug : null) ?? null,
         qty: i.qty,
         unitPricePaise: i.unitPricePaise,
         unitMrpPaise: i.unitMrpPaise,
@@ -331,8 +333,8 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
           .where(and(inArray(orderEvents.orderId, list.map((o) => o.id)), eq(orderEvents.status, 'delivered')))
       : [];
     const deliveredAt = new Map(delivered.map((e) => [e.orderId, e.at]));
-    const mine = await ratingsBy(db, userId, [...new Set(items.flatMap((i) => (i.productId == null ? [] : [i.productId])))]);
-    return { orders: list.map((o) => summary(o, items.filter((i) => i.orderId === o.id), deliveredAt.get(o.id) ?? null, mine)) };
+    const rated = await ratingsForOrders(db, userId, list.map((o) => o.id));
+    return { orders: list.map((o) => summary(o, items.filter((i) => i.orderId === o.id), deliveredAt.get(o.id) ?? null, rated.get(o.id) ?? new Map())) };
   });
 
   /**
@@ -384,8 +386,8 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
   });
 
   /**
-   * Blinkit's "Rate order": stars (1–5) and optional words for the items of a delivered order. Rating
-   * a product again (from this or another order) replaces the customer's earlier rating of it.
+   * Blinkit's "Rate order": stars (1–5) and optional words for the items of a delivered order. Each
+   * order is rated on its own; rating the same order again replaces what it had.
    */
   app.post('/v1/orders/:number/ratings', async (req) => {
     const userId = requireUser(req);
@@ -413,7 +415,7 @@ export async function orderRoutes(app: FastifyInstance, { db }: { db: Db }) {
           .insert(productReviews)
           .values({ productId: r.productId, userId, orderId: o.id, rating: r.rating, comment })
           .onConflictDoUpdate({
-            target: [productReviews.userId, productReviews.productId],
+            target: [productReviews.userId, productReviews.productId, productReviews.orderId],
             set: { rating: r.rating, comment, orderId: o.id, updatedAt: new Date() },
           });
       }

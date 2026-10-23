@@ -72,6 +72,8 @@ beforeAll(async () => {
   await order(people[0].id, 'ED-1', 'delivered', [bulb, fan], new Date('2026-10-01'));
   await order(people[0].id, 'ED-2', 'placed', [wire], new Date('2026-10-05'));
   await order(people[0].id, 'ED-3', 'cancelled', [fan], new Date('2026-10-09'));
+  // a second delivered order with the bulb in it
+  await order(people[0].id, 'ED-6', 'delivered', [bulb], new Date('2026-10-03'));
   await order(people[1].id, 'ED-4', 'delivered', [bulb]);
   await order(people[2].id, 'ED-5', 'delivered', [bulb]);
 });
@@ -110,7 +112,7 @@ describe('rating a delivered order', () => {
     expect(card).toMatchObject({ rating: 4, ratingCount: 1 });
   });
 
-  it('rating again replaces the earlier rating instead of adding one', async () => {
+  it('rating the same order again replaces its rating instead of adding one', async () => {
     await call('POST', '/v1/orders/ED-1/ratings', { ratings: [{ productId: bulb, rating: 3, comment: 'Flickers a bit' }] }, tokens[0]);
     const p = (await call('GET', '/v1/products/bulb')).body;
     expect(p.rating).toBe(3);
@@ -134,6 +136,25 @@ describe('rating a delivered order', () => {
     const cards = (await call('GET', '/v1/products?category=lights')).body.items;
     expect(cards.find((c: any) => c.id === fan).badge).toBe('Bestseller');
     expect(cards.find((c: any) => c.id === wire).badge).toBeNull();
+  });
+
+  it('each order is rated on its own; the product counts each customer once, by their latest rating', async () => {
+    // the bulb was rated from ED-1, but ED-6 hasn't been rated yet
+    const before = (await call('GET', '/v1/orders/ED-6', undefined, tokens[0])).body;
+    expect(before).toMatchObject({ canRate: true, myRating: null });
+    expect(before.items[0]).toMatchObject({ myRating: null, myComment: null });
+
+    const r = await call('POST', '/v1/orders/ED-6/ratings', { ratings: [{ productId: bulb, rating: 2, comment: 'Stopped working' }] }, tokens[0]);
+    expect(r.status).toBe(200);
+    expect(r.body.myRating).toBe(2);
+    // ED-1 keeps what it was given
+    expect((await call('GET', '/v1/orders/ED-1', undefined, tokens[0])).body.items.find((i: any) => i.productId === bulb).myRating).toBe(5);
+
+    // still 3 customers: this one now counts with 2 (their latest), with 4 and 5 from the others
+    const p = (await call('GET', '/v1/products/bulb')).body;
+    expect(p.reviews).toMatchObject({ average: 3.7, count: 3, stars: [1, 1, 0, 1, 0] });
+    expect(p.reviews.recent.map((x: any) => x.comment)).toEqual(['Stopped working', 'Value for money']);
+    expect(p).toMatchObject({ rating: 3.7, ratingCount: 3, badge: null });
   });
 
   it('a product nobody rated has an empty summary', async () => {

@@ -430,6 +430,7 @@ describe('order lifecycle', () => {
     expect(d.body.canCancel).toBe(false);
     expect(d.body.items[0].canReturn).toBe(true);
     expect(d.body.items[0]).toHaveProperty('unitLabel', null); // the test bulb has no pack size
+    expect(d.body.items[0]).toHaveProperty('slug', 'bulb'); // tapping the item opens its page
     expect(d.body.deliveredAt).toEqual(expect.any(String));
 
     // the list says when each order was delivered (for "Arrived in …"); undelivered ones say null

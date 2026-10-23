@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { banners, brands, categories, homeSections, orderItems, products, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
-import { categoryMembers, inCategories, subtreeCount } from '../lib/categories.js';
+import { categoryKind, categoryMembers, inCategories, subtreeCount } from '../lib/categories.js';
 import { facetAndFilter, isFiltering, parsePicked } from '../lib/filters.js';
 import { htmlToText } from '../lib/html.js';
 import { reviewSummary } from '../lib/reviews.js';
@@ -218,7 +218,9 @@ function byPopularity(a: CardRow, b: CardRow) {
 
 /**
  * Blinkit's "People also bought": products bought in the same orders as this one, most often first,
- * topped up with a random pick of bestsellers from other categories (different on every visit).
+ * topped up with a random pick (bestsellers first, different on every visit) from related categories —
+ * other electrical shelves for a wire (switches, sockets…), other lighting for a light — then from any
+ * other category. Never from the product's own category: "Similar products" covers that.
  */
 async function alsoBought(db: Db, p: typeof products.$inferSelect, limit: number): Promise<CardRow[]> {
   const together = await db
@@ -248,21 +250,39 @@ async function alsoBought(db: Db, p: typeof products.$inferSelect, limit: number
         .slice(0, limit)
     : [];
   if (bought.length >= limit) return bought;
-  const skip = [p.id, ...bought.map((b) => b.p.id)];
-  const fill = await db
-    .select({ p: products, brandName: brands.name })
-    .from(products)
-    .leftJoin(brands, eq(brands.id, products.brandId))
-    .where(
-      and(
-        eq(products.isActive, true),
-        notInArray(products.id, skip),
-        p.categoryId ? or(sql`${products.categoryId} is null`, ne(products.categoryId, p.categoryId)) : undefined,
-      ),
-    )
-    .orderBy(desc(sql`${products.stockQty} > 0`), desc(products.isBestseller), sql`random()`)
-    .limit(limit - bought.length);
-  return [...bought, ...fill];
+
+  // categories of the same kind as this product's
+  const cats = await db.select({ id: categories.id, name: categories.name, parentId: categories.parentId }).from(categories).where(eq(categories.isActive, true));
+  const byId = new Map(cats.map((c) => [c.id, c]));
+  const kindOf = (id: number | null) => {
+    const c = id != null ? byId.get(id) : undefined;
+    return c ? categoryKind(c.name, c.parentId != null ? byId.get(c.parentId)?.name : null) : null;
+  };
+  const kind = kindOf(p.categoryId);
+  const related = kind ? cats.filter((c) => c.id !== p.categoryId && kindOf(c.id) === kind).map((c) => c.id) : [];
+
+  const out = [...bought];
+  const pick = async (where: SQL | undefined) => {
+    if (out.length >= limit) return;
+    const rows = await db
+      .select({ p: products, brandName: brands.name })
+      .from(products)
+      .leftJoin(brands, eq(brands.id, products.brandId))
+      .where(
+        and(
+          eq(products.isActive, true),
+          notInArray(products.id, [p.id, ...out.map((b) => b.p.id)]),
+          p.categoryId ? or(sql`${products.categoryId} is null`, ne(products.categoryId, p.categoryId)) : undefined,
+          where,
+        ),
+      )
+      .orderBy(desc(sql`${products.stockQty} > 0`), desc(products.isBestseller), sql`random()`)
+      .limit(limit - out.length);
+    out.push(...rows);
+  };
+  if (related.length) await pick(inArray(products.categoryId, related));
+  await pick(undefined);
+  return out;
 }
 
 export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {

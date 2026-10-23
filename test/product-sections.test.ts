@@ -19,11 +19,12 @@ const skus = (list: any[]) => list.map((p) => p.sku);
 beforeAll(async () => {
   h = await openDb({ memory: true });
   app = await buildApp(h.db);
-  const [wires, lamps] = await h.db
+  const [wires, lamps, switches] = await h.db
     .insert(categories)
     .values([
       { slug: 'wires', name: 'Wires' },
       { slug: 'lamps', name: 'Lamps' },
+      { slug: 'switches', name: 'Switches & Sockets' },
     ])
     .returning();
   const [finolex, havells, philips] = await h.db
@@ -52,6 +53,7 @@ beforeAll(async () => {
       ...wireRows,
       { ...base, sku: 'L1', slug: 'l1', name: 'Lamp 1', categoryId: lamps.id, brandId: philips.id, pricePaise: 50_000, isBestseller: true },
       { ...base, sku: 'L2', slug: 'l2', name: 'Lamp 2', categoryId: lamps.id, brandId: philips.id, pricePaise: 60_000 },
+      { ...base, sku: 'S1', slug: 's1', name: 'Modular Switch', categoryId: switches.id, brandId: havells.id, pricePaise: 9_000 },
     ])
     .returning();
   const bySku = new Map(inserted.map((p) => [p.sku, p]));
@@ -126,11 +128,16 @@ describe('product page sections', () => {
     expect(d.brandsInCategory.find((b: any) => b.slug === 'havells').logoUrl).toBeNull();
   });
 
-  it('puts products bought together first in "People also bought", then bestsellers from other categories', async () => {
+  it('puts products bought together first in "People also bought", then related shelves, then other categories', async () => {
     const d = await detail('w0');
-    expect(skus(d.alsoBought)).toEqual(['L2', 'L1']);
-    // a product nobody bought with anything: only the top-up, never its own category or itself
+    expect(skus(d.alsoBought)).toEqual(['L2', 'S1', 'L1']);
+    // a wire nobody bought with anything: switches first (electrical, like wires), then the rest —
+    // never its own category or itself
     const other = await detail('w5');
-    expect(skus(other.alsoBought)).toEqual(['L1', 'L2']);
+    expect(skus(other.alsoBought)).toEqual(['S1', 'L1', 'L2']);
+    // a lamp: there's no other lighting shelf, so the top-up comes from anywhere but lamps
+    const lamp = skus((await detail('l1')).alsoBought);
+    expect(lamp).toHaveLength(6);
+    expect(lamp.some((s) => s.startsWith('L'))).toBe(false);
   });
 });
