@@ -134,6 +134,11 @@ export const users = pgTable(
     phoneVerifiedAt: timestamp('phone_verified_at', { withTimezone: true }),
     role: text('role', { enum: ['customer', 'admin'] }).notNull().default('customer'),
     notifyOffers: boolean('notify_offers').notNull().default(false),
+    /**
+     * When the customer deleted their account in the app: name, phone, email and password are wiped
+     * (the row stays because past orders point at it), so their number can sign up again as new.
+     */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [uniqueIndex('users_phone_uq').on(t.phone), uniqueIndex('users_email_uq').on(t.email)],

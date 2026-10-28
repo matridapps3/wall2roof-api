@@ -57,6 +57,13 @@
       "when": 1792755935079,
       "tag": "0007_checkout_extras",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793190037965,
+      "tag": "0008_account_deletion",
+      "breakpoints": true
     }
   ]
 }

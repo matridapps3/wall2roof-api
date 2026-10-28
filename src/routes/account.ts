@@ -1,11 +1,27 @@
-import { and, desc, eq, isNull, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type { Db } from '../db/client.js';
-import { addresses, brands, notifications, orders, products, supportMessages, users, wishlist } from '../db/schema.js';
+import {
+  addresses,
+  brands,
+  cartItems,
+  notifications,
+  orders,
+  otpCodes,
+  productReviews,
+  products,
+  refreshTokens,
+  returnRequests,
+  supportMessages,
+  users,
+  wishlist,
+} from '../db/schema.js';
 import { HttpError, idParam, parse, requireUser } from '../http.js';
 import { hashPassword, isStrongEnough, normalizeIndianMobile, PASSWORD_RULE } from '../lib/auth.js';
+import { refreshProductRatings } from '../lib/reviews.js';
+import type { VoiceStore } from '../lib/voice.js';
 import { publicUser } from './auth.js';
 import { productCard } from './catalog.js';
 
@@ -33,11 +49,15 @@ function addressOut(a: typeof addresses.$inferSelect) {
   return { ...a, lat: a.lat ? Number(a.lat) : null, lng: a.lng ? Number(a.lng) : null };
 }
 
-export async function accountRoutes(app: FastifyInstance, { db }: { db: Db }) {
+/** Orders still being delivered and returns still being handled: the account can't be deleted until they're done. */
+const OPEN_ORDER = ['placed', 'confirmed', 'packed', 'out_for_delivery'] as const;
+const OPEN_RETURN = ['requested', 'approved'] as const;
+
+export async function accountRoutes(app: FastifyInstance, { db, voice }: { db: Db; voice: VoiceStore }) {
   app.get('/v1/me', async (req) => {
     const userId = requireUser(req);
     const [u] = await db.select().from(users).where(eq(users.id, userId));
-    if (!u) throw new HttpError(401, 'session_expired', 'Please log in again.');
+    if (!u || u.deletedAt) throw new HttpError(401, 'session_expired', 'Please log in again.');
     const [o, w, a, n] = await Promise.all([
       db.$count(orders, eq(orders.userId, userId)),
       db.$count(wishlist, eq(wishlist.userId, userId)),
@@ -80,6 +100,47 @@ export async function accountRoutes(app: FastifyInstance, { db }: { db: Db }) {
       .where(eq(users.id, userId))
       .returning();
     return { user: publicUser(u) };
+  });
+
+  // Apple and Google require that customers can delete their account in the app. Everything personal
+  // goes; orders stay as sales records (GST law), without the name, phone and street address.
+  app.delete('/v1/me', async (req) => {
+    const userId = requireUser(req);
+    const [u] = await db.select().from(users).where(eq(users.id, userId));
+    if (!u || u.deletedAt) throw new HttpError(401, 'session_expired', 'Please log in again.');
+    if (await db.$count(orders, and(eq(orders.userId, userId), inArray(orders.status, [...OPEN_ORDER])))) {
+      throw new HttpError(409, 'open_orders', 'You have an order on its way. You can delete your account once it’s delivered or cancelled.');
+    }
+    if (await db.$count(returnRequests, and(eq(returnRequests.userId, userId), inArray(returnRequests.status, [...OPEN_RETURN])))) {
+      throw new HttpError(409, 'open_returns', 'You have a return in progress. You can delete your account once it’s completed.');
+    }
+    const rated = await db.transaction(async (tx) => {
+      const reviews = await tx.delete(productReviews).where(eq(productReviews.userId, userId)).returning({ productId: productReviews.productId });
+      await tx.delete(addresses).where(eq(addresses.userId, userId));
+      await tx.delete(cartItems).where(eq(cartItems.userId, userId));
+      await tx.delete(wishlist).where(eq(wishlist.userId, userId));
+      await tx.delete(notifications).where(eq(notifications.userId, userId));
+      // logs them out on every phone
+      await tx.delete(refreshTokens).where(eq(refreshTokens.userId, userId));
+      if (u.phone) await tx.delete(otpCodes).where(eq(otpCodes.phone, u.phone));
+      await tx
+        .update(orders)
+        .set({
+          address: sql`${orders.address} || jsonb_build_object('name', 'Deleted customer', 'phone', '', 'line1', '', 'line2', null, 'landmark', null, 'otherLabel', null, 'lat', null, 'lng', null)`,
+          voiceNote: null,
+        })
+        .where(eq(orders.userId, userId));
+      await tx.update(supportMessages).set({ name: 'Deleted customer', email: '', phone: null }).where(eq(supportMessages.userId, userId));
+      const now = new Date();
+      await tx
+        .update(users)
+        .set({ name: 'Deleted customer', phone: null, email: null, passwordHash: null, phoneVerifiedAt: null, notifyOffers: false, deletedAt: now, updatedAt: now })
+        .where(eq(users.id, userId));
+      return [...new Set(reviews.map((r) => r.productId))];
+    });
+    await refreshProductRatings(db, rated);
+    await voice.removeUser(userId).catch((e: unknown) => req.log.error(e, 'could not remove voice notes of a deleted account'));
+    return { ok: true };
   });
 
   // ---- Addresses ----

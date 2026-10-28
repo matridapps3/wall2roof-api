@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -46,5 +46,10 @@ export class VoiceStore {
     await writeFile(tmp, bytes);
     await rename(tmp, file);
     return id;
+  }
+
+  /** Removes every recording a customer made (when they delete their account). */
+  async removeUser(userId: number) {
+    await rm(join(this.dir, String(userId)), { recursive: true, force: true });
   }
 }
