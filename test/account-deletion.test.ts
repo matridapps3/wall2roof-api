@@ -127,12 +127,12 @@ describe('privacy and support pages', () => {
       { key: 'supportEmail', value: 'help@example.com' },
       { key: 'supportPhone', value: '+91 98765 00000' },
     ]);
-    for (const url of ['/privacy', '/support']) {
+    for (const url of ['/privacy', '/support', '/delete-account']) {
       const res = await app.inject({ method: 'GET', url });
       expect(res.statusCode).toBe(200);
       expect(res.headers['content-type']).toContain('text/html');
       expect(res.body).toContain('mailto:help@example.com');
-      expect(res.body).toContain('Account → Delete account');
+      expect(res.body).toContain('Delete account</strong>');
     }
   });
 });

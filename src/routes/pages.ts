@@ -4,18 +4,19 @@ import type { Db } from '../db/client.js';
 import { getSettings, type StoreSettings } from '../lib/settings.js';
 
 /**
- * The public web pages the App Store and Play Store listings link to: the privacy policy and the
- * support page. Contact details come from the admin's settings (support phone, email, hours).
+ * The public web pages the App Store and Play Store listings link to: the privacy policy, the
+ * support page, and how to delete an account (Google Play asks for a web link as well as the in-app
+ * button). Contact details come from the admin's settings (support phone, email, hours).
  */
 
-/** The business behind the app, as the privacy policy names it. TO FILL IN before going live. */
+/** The business behind the app, as the privacy policy names it (the app's Terms tab says the same). */
 const BUSINESS = {
-  name: '[Registered business name]',
-  address: '[Registered business address]',
-  grievanceOfficer: '[Grievance Officer name]',
+  name: 'ElectroDash',
+  address: 'Plot No. 962, Sector 82, JLPL, Mohali, Punjab 140306',
+  grievanceOfficer: 'Vivek Kumar',
 };
 /** Shown at the top of the privacy policy; change it whenever the policy changes. */
-const POLICY_UPDATED = '28 October 2026';
+const POLICY_UPDATED = '29 October 2026';
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -49,7 +50,7 @@ function page(title: string, body: string) {
 <main>
 ${body}
 </main>
-<footer class="muted"><a href="/privacy">Privacy policy</a> · <a href="/support">Support</a></footer>
+<footer class="muted"><a href="/privacy">Privacy policy</a> · <a href="/support">Support</a> · <a href="/delete-account">Delete account</a></footer>
 </body>
 </html>`;
 }
@@ -103,7 +104,7 @@ function privacyHtml(s: StoreSettings) {
 <p>We keep your account data until you delete your account. Order and invoice records are kept for as long as GST and tax law requires, even after you delete your account, but without your name, phone number and street address.</p>
 
 <h2>Delete your account</h2>
-<p>In the app, go to <strong>Account → Delete account</strong>. This permanently removes your name, mobile number, email, saved addresses, cart, wishlist, notifications, ratings, voice instructions and login sessions. Past orders stay as sales records without your personal details. If an order is still on its way, you can delete your account once it is delivered or cancelled. You can also ask us to delete it using the contact details below.</p>
+<p>In the app, go to <strong>Account → Delete account</strong> (<a href="/delete-account">how to delete your account</a>). This permanently removes your name, mobile number, email, saved addresses, cart, wishlist, notifications, ratings, voice instructions and login sessions. Past orders stay as sales records without your personal details. If an order is still on its way, you can delete your account once it is delivered or cancelled. You can also ask us to delete it using the contact details below.</p>
 
 <h2>Your rights</h2>
 <p>You can ask to see, correct or delete your personal data, withdraw your consent, or complain about how we handle it. Contact our Grievance Officer, ${esc(BUSINESS.grievanceOfficer)}, using the details below. If you are not satisfied with our reply, you can complain to the Data Protection Board of India.</p>
@@ -132,17 +133,66 @@ function supportHtml(s: StoreSettings) {
 <p>Open <strong>Account → Your orders</strong> and tap the order to see each step. You can cancel an order until it is packed.</p>
 
 <h2>Returns and replacements</h2>
-<p>Open the delivered order in <strong>Your orders</strong> and tap <strong>Return or replace items</strong> within the return window shown there. Items should be unused and in their original packaging.</p>
+<p>Open the delivered order in <strong>Your orders</strong> and tap <strong>Return or replace items</strong> within the return window shown there (7 days for most items) if an item arrived damaged, defective, wrong or with parts missing. Send it back in its original box with all parts. We collect it from your address.</p>
 
 <h2>Where we deliver</h2>
-<p>We deliver to the PIN codes our stores serve. The app tells you before you order whether we deliver to your address.</p>
+<p>We deliver from our store in Mohali, Punjab, to the PIN codes it serves. The app tells you before you order whether we deliver to your address.</p>
 
 <h2>Delete your account</h2>
-<p>In the app, go to <strong>Account → Delete account</strong>. Your personal details are removed permanently. Read more in our <a href="/privacy">privacy policy</a>.</p>
+<p>In the app, go to <strong>Account → Delete account</strong>. Your personal details are removed permanently. <a href="/delete-account">More about deleting your account</a>.</p>
+`;
+}
+
+/** Without the app: an email that opens ready to send, or the support phone. */
+function deleteRequestHtml(s: StoreSettings) {
+  const mail = s.supportEmail
+    ? `<a href="mailto:${esc(s.supportEmail)}?subject=${encodeURIComponent('Delete my ElectroDash account')}&body=${encodeURIComponent('Please delete my ElectroDash account. My registered mobile number is: ')}">${esc(s.supportEmail)}</a>`
+    : '';
+  if (mail) return `<p>Email ${mail} from any email address, with the subject <strong>Delete my ElectroDash account</strong> and the mobile number you log in with.${s.supportPhone ? ` Or call ${esc(s.supportPhone)}.` : ''} To protect your account we may ask you to confirm with a code sent to that number.</p>`;
+  return `<p>Write to us from the app’s <strong>Account → Contact us</strong> page, or use the contact details on our <a href="/support">support page</a>.</p>`;
+}
+
+function deleteAccountHtml(s: StoreSettings) {
+  return `
+<h1>Delete your ElectroDash account</h1>
+<p>You can delete your ElectroDash account and personal data at any time.</p>
+
+<div class="card">
+<h2 style="margin-top:0">In the app</h2>
+<ol>
+  <li>Open ElectroDash and log in.</li>
+  <li>Tap <strong>Account</strong>.</li>
+  <li>Scroll down and tap <strong>Delete account</strong>.</li>
+  <li>Tap <strong>Delete my account</strong>, then <strong>Delete</strong> to confirm.</li>
+</ol>
+<p class="muted">Your account is deleted straight away and you are logged out on every phone.</p>
+</div>
+
+<h2>Without the app</h2>
+${deleteRequestHtml(s)}
+<p>We delete the account within 30 days of your request and confirm by email.</p>
+
+<h2>What is deleted</h2>
+<ul>
+  <li>Your name, mobile number, email and password</li>
+  <li>Saved addresses</li>
+  <li>Cart, wishlist and notifications</li>
+  <li>Your ratings and reviews</li>
+  <li>Voice instructions you recorded</li>
+  <li>Your login sessions</li>
+</ul>
+
+<h2>What is kept</h2>
+<p>Records of past orders (items, amounts, payment method, PIN code and any GSTIN), kept for as long as GST and tax law requires. Your name, phone number and street address are removed from them.</p>
+<p>If an order is still on its way or a return is in progress, the account can be deleted once it is finished.</p>
+<p>Read our <a href="/privacy">privacy policy</a>.</p>
 `;
 }
 
 export async function pageRoutes(app: FastifyInstance, { db }: { db: Db }) {
   app.get('/privacy', async (_req, reply) => reply.type('text/html; charset=utf-8').send(page('Privacy policy', privacyHtml(await getSettings(db)))));
   app.get('/support', async (_req, reply) => reply.type('text/html; charset=utf-8').send(page('Help & support', supportHtml(await getSettings(db)))));
+  app.get('/delete-account', async (_req, reply) =>
+    reply.type('text/html; charset=utf-8').send(page('Delete your account', deleteAccountHtml(await getSettings(db)))),
+  );
 }
