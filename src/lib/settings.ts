@@ -31,6 +31,12 @@ export type StoreSettings = FeeSettings & {
    */
   latestAppVersion: string;
   latestAppUrl: string;
+  /**
+   * Show customers' written reviews on product pages (each with Report / Block). Off (default) =
+   * like Blinkit: only the stars (average, count, 5→1 bars); what customers write reaches only staff.
+   * Turning it on also needs the app's rating box ("only our team sees this") and Terms changed back.
+   */
+  writtenReviews: boolean;
 };
 
 export const DEFAULT_SETTINGS: StoreSettings = {
@@ -49,6 +55,7 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   testLogin: false,
   latestAppVersion: '',
   latestAppUrl: '',
+  writtenReviews: false,
 };
 
 export async function getSettings(db: Db): Promise<StoreSettings> {

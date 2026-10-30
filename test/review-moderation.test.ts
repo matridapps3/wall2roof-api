@@ -5,6 +5,7 @@ import { buildApp } from '../src/app.js';
 import { openDb, type DbHandle } from '../src/db/client.js';
 import { categories, orderItems, orders, productReviews, products, reviewReports, userBlocks, users } from '../src/db/schema.js';
 import { signAccessToken } from '../src/lib/auth.js';
+import { setSetting } from '../src/lib/settings.js';
 import { hasBlockedWords } from '../src/lib/moderation.js';
 
 const KEY = 'test-integration-key-0123456789-abcdefghij';
@@ -33,6 +34,7 @@ const product = async (token?: string) => (await call('GET', '/v1/products/bulb'
 beforeAll(async () => {
   h = await openDb({ memory: true });
   app = await buildApp(h.db, {}, { integrationKey: KEY });
+  await setSetting(h.db, 'writtenReviews', true); // these tests cover the written reviews
   const [cat] = await h.db.insert(categories).values({ slug: 'lights', name: 'Lights' }).returning();
   [{ id: bulb }] = await h.db
     .insert(products)

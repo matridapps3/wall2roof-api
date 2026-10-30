@@ -68,26 +68,29 @@ export function reviewerName(name: string | null) {
 }
 
 /**
- * The product page's "Ratings & reviews": the average, how many people rated it, how many gave each
- * number of stars (5 down to 1), and the latest reviews with words. A logged-in viewer doesn't see the
- * words of people they blocked, and their own reviews are marked (no "Report" on those).
+ * The product page's ratings: the average, how many people rated it, how many gave each number of
+ * stars (5 down to 1), and, only with `words` (the writtenReviews setting), the latest reviews with
+ * words. A logged-in viewer doesn't see the words of people they blocked, and their own reviews are
+ * marked (no "Report" on those).
  */
-export async function reviewSummary(db: Db, productId: number, viewerId: number | null = null) {
+export async function reviewSummary(db: Db, productId: number, { viewerId = null, words = false }: { viewerId?: number | null; words?: boolean } = {}) {
   const latest = latestPerCustomer(db, eq(productReviews.productId, productId));
   const withWords = sql`coalesce(trim(${latest.comment}), '') <> ''`;
-  const blocked = viewerId == null ? [] : (await db.select({ id: userBlocks.blockedUserId }).from(userBlocks).where(eq(userBlocks.userId, viewerId))).map((b) => b.id);
+  const blocked = !words || viewerId == null ? [] : (await db.select({ id: userBlocks.blockedUserId }).from(userBlocks).where(eq(userBlocks.userId, viewerId))).map((b) => b.id);
   const [counts, recent] = await Promise.all([
     db
       .select({ rating: latest.rating, n: sql<number>`count(*)::int` })
       .from(latest)
       .groupBy(latest.rating),
-    db
-      .select({ id: latest.id, userId: latest.userId, rating: latest.rating, comment: latest.comment, at: latest.at, name: users.name })
-      .from(latest)
-      .innerJoin(users, eq(users.id, latest.userId))
-      .where(blocked.length ? and(withWords, notInArray(latest.userId, blocked)) : withWords)
-      .orderBy(desc(latest.at))
-      .limit(5),
+    words
+      ? db
+          .select({ id: latest.id, userId: latest.userId, rating: latest.rating, comment: latest.comment, at: latest.at, name: users.name })
+          .from(latest)
+          .innerJoin(users, eq(users.id, latest.userId))
+          .where(blocked.length ? and(withWords, notInArray(latest.userId, blocked)) : withWords)
+          .orderBy(desc(latest.at))
+          .limit(5)
+      : Promise.resolve([]),
   ]);
   const stars = [5, 4, 3, 2, 1].map((s) => counts.find((c) => c.rating === s)?.n ?? 0);
   const count = stars.reduce((a, b) => a + b, 0);

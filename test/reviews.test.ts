@@ -5,6 +5,7 @@ import { buildApp } from '../src/app.js';
 import { openDb, type DbHandle } from '../src/db/client.js';
 import { brands, categories, orderItems, orders, products, users } from '../src/db/schema.js';
 import { signAccessToken } from '../src/lib/auth.js';
+import { setSetting } from '../src/lib/settings.js';
 import { reviewerName } from '../src/lib/reviews.js';
 import { cardBadge } from '../src/routes/catalog.js';
 
@@ -41,6 +42,7 @@ async function order(userId: number, number: string, status: 'delivered' | 'plac
 beforeAll(async () => {
   h = await openDb({ memory: true });
   app = await buildApp(h.db);
+  await setSetting(h.db, 'writtenReviews', true); // these tests cover the written reviews
   const [cat] = await h.db.insert(categories).values({ slug: 'lights', name: 'Lights' }).returning();
   const [philips, anchor] = await h.db
     .insert(brands)
@@ -118,6 +120,17 @@ describe('rating a delivered order', () => {
     expect(p.rating).toBe(3);
     expect(p.ratingCount).toBe(1);
     expect(p.reviews.recent).toEqual([{ id: expect.any(Number), name: 'Priya S.', rating: 3, comment: 'Flickers a bit', at: expect.any(String), byYou: false }]);
+  });
+
+  it('with written reviews off (the default, like Blinkit) the product page shows only the stars', async () => {
+    await setSetting(h.db, 'writtenReviews', false);
+    try {
+      const p = (await call('GET', '/v1/products/bulb', undefined, tokens[1])).body;
+      expect(p.reviews).toEqual({ average: 3, count: 1, stars: [0, 0, 1, 0, 0], recent: [] });
+      expect(JSON.stringify(p)).not.toContain('Flickers a bit');
+    } finally {
+      await setSetting(h.db, 'writtenReviews', true);
+    }
   });
 
   it('the product page sums up everyone’s stars; enough good ratings make it "Top Rated"', async () => {

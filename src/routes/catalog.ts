@@ -534,7 +534,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
             .limit(300)
         : Promise.resolve([]),
       alsoBought(db, p, 6),
-      reviewSummary(db, p.id, req.auth ? Number(req.auth.sub) : null),
+      getSettings(db).then((s) => reviewSummary(db, p.id, { viewerId: req.auth ? Number(req.auth.sub) : null, words: s.writtenReviews })),
     ]);
 
     // A fresh pick on every visit (like Home's bestsellers), six each: two rows of three, like Blinkit's.
