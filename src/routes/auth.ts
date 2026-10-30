@@ -19,7 +19,7 @@ import {
   verifyPassword,
 } from '../lib/auth.js';
 import { config } from '../config.js';
-import { sendOtp } from '../lib/otp-sender.js';
+import { checkSentOtp, sendOtp, type OtpDelivery } from '../lib/otp-sender.js';
 import { getSettings } from '../lib/settings.js';
 
 const OTP_TTL_MS = 5 * 60_000;
@@ -79,9 +79,19 @@ export async function authRoutes(app: FastifyInstance, { db }: { db: Db }) {
     // the store reviewers' number: a fixed code they were given, no SMS
     const reviewer = !!config.REVIEW_PHONE && !!config.REVIEW_OTP && phone === config.REVIEW_PHONE;
     const code = reviewer ? config.REVIEW_OTP! : newOtp();
-    await db.insert(otpCodes).values({ phone, codeHash: hashOtp(phone, code), expiresAt: new Date(Date.now() + OTP_TTL_MS) });
-    const delivery = reviewer ? { sent: true as const } : await sendOtp(phone, code, req.log, (await getSettings(db)).testLogin);
-    return { sent: true, resendInSec: OTP_RESEND_SEC, ...(delivery.devCode ? { devCode: delivery.devCode } : {}) };
+    const delivery: OtpDelivery = reviewer ? { sent: true } : await sendOtp(phone, code, req.log, (await getSettings(db)).testLogin);
+    await db.insert(otpCodes).values({
+      phone,
+      // a provider that made its own code (Message Central): keep its id instead of our code's hash
+      codeHash: delivery.verificationId ? '' : hashOtp(phone, code),
+      verificationId: delivery.verificationId ?? null,
+      expiresAt: new Date(Date.now() + OTP_TTL_MS),
+    });
+    return {
+      sent: true,
+      resendInSec: Math.max(OTP_RESEND_SEC, delivery.resendInSec ?? 0),
+      ...(delivery.devCode ? { devCode: delivery.devCode } : {}),
+    };
   });
 
   app.post('/v1/auth/otp/verify', async (req) => {
@@ -97,7 +107,14 @@ export async function authRoutes(app: FastifyInstance, { db }: { db: Db }) {
     if (otp.attempts >= OTP_MAX_ATTEMPTS) {
       throw new HttpError(429, 'otp_locked', 'Too many wrong attempts. Request a new code.');
     }
-    if (!safeEqualHex(otp.codeHash, hashOtp(phone, body.code))) {
+    const check = otp.verificationId
+      ? await checkSentOtp(phone, otp.verificationId, body.code)
+      : safeEqualHex(otp.codeHash, hashOtp(phone, body.code))
+        ? 'ok'
+        : 'wrong';
+    if (check === 'expired') throw new HttpError(400, 'otp_expired', 'This code has expired. Request a new one.');
+    if (check === 'locked') throw new HttpError(429, 'otp_locked', 'Too many wrong attempts. Request a new code.');
+    if (check === 'wrong') {
       await db.update(otpCodes).set({ attempts: otp.attempts + 1 }).where(eq(otpCodes.id, otp.id));
       throw new HttpError(400, 'otp_wrong', 'That code is incorrect. Check the SMS and try again.');
     }

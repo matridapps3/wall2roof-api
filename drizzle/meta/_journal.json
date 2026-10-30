@@ -71,6 +71,13 @@
       "when": 1793337395122,
       "tag": "0009_review_moderation",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793357422243,
+      "tag": "0010_otp_verification_id",
+      "breakpoints": true
     }
   ]
 }

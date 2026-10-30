@@ -1,0 +1,1 @@
+ALTER TABLE "otp_codes" ADD COLUMN "verification_id" text;

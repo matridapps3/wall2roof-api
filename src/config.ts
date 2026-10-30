@@ -20,11 +20,15 @@ const schema = z.object({
   /**
    * OTP delivery. `console` prints the code in the server log and returns it to the app
    * (development only). `test` does the same on the live server while the app is being built —
-   * no SMS, anyone can log in to any number, so never with real customers. `msg91` sends a real SMS.
+   * no SMS, anyone can log in to any number, so never with real customers. `messagecentral` and
+   * `msg91` send a real SMS (MSG91 needs our own DLT registration in India; Message Central doesn't).
    */
-  OTP_PROVIDER: z.enum(['console', 'test', 'msg91']).default('console'),
+  OTP_PROVIDER: z.enum(['console', 'test', 'msg91', 'messagecentral']).default('console'),
   MSG91_AUTH_KEY: z.string().optional(),
   MSG91_TEMPLATE_ID: z.string().optional(),
+  /** Message Central (VerifyNow): the account's customer id (C-…) and its password. */
+  MESSAGECENTRAL_CUSTOMER_ID: z.string().optional(),
+  MESSAGECENTRAL_PASSWORD: z.string().optional(),
   /**
    * The App Store / Play Store reviewers' login once real SMS is on: this one number logs in with
    * REVIEW_OTP and gets no SMS. Both unset = no such number.

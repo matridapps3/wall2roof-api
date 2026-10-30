@@ -148,6 +148,8 @@ export const otpCodes = pgTable('otp_codes', {
   id: serial('id').primaryKey(),
   phone: text('phone').notNull(),
   codeHash: text('code_hash').notNull(),
+  /** Message Central made and sent this code itself: its id for checking it (code_hash is then ''). */
+  verificationId: text('verification_id'),
   attempts: integer('attempts').notNull().default(0),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
