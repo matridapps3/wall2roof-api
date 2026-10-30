@@ -117,7 +117,7 @@ describe('rating a delivered order', () => {
     const p = (await call('GET', '/v1/products/bulb')).body;
     expect(p.rating).toBe(3);
     expect(p.ratingCount).toBe(1);
-    expect(p.reviews.recent).toEqual([{ name: 'Priya S.', rating: 3, comment: 'Flickers a bit', at: expect.any(String) }]);
+    expect(p.reviews.recent).toEqual([{ id: expect.any(Number), name: 'Priya S.', rating: 3, comment: 'Flickers a bit', at: expect.any(String), byYou: false }]);
   });
 
   it('the product page sums up everyone’s stars; enough good ratings make it "Top Rated"', async () => {

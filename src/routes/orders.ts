@@ -20,6 +20,7 @@ import { HttpError, parse, requireAdmin, requireUser } from '../http.js';
 import { normalizeIndianMobile } from '../lib/auth.js';
 import { categoriesOf } from '../lib/categories.js';
 import { findCoupon, isFirstOrder } from '../lib/checkout.js';
+import { hasBlockedWords } from '../lib/moderation.js';
 import { MAX_TIP_PAISE, quote } from '../lib/pricing.js';
 import { ratingsForOrders, refreshProductRatings, type OrderRatings } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
@@ -443,6 +444,9 @@ export async function orderRoutes(app: FastifyInstance, { db, voice }: { db: Db;
     const inOrder = new Set(items.flatMap((i) => (i.productId == null ? [] : [i.productId])));
     for (const r of body.ratings) {
       if (!inOrder.has(r.productId)) throw new HttpError(400, 'invalid_item', 'That item isn’t part of this order.');
+      if (r.comment && hasBlockedWords(r.comment)) {
+        throw new HttpError(400, 'comment_not_allowed', 'Please keep your review polite: remove the offensive words and try again.');
+      }
     }
     await db.transaction(async (tx) => {
       for (const r of body.ratings) {

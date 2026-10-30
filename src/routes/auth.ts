@@ -76,9 +76,11 @@ export async function authRoutes(app: FastifyInstance, { db }: { db: Db }) {
     if (recent.length >= OTP_MAX_PER_HOUR) {
       throw new HttpError(429, 'otp_limit', 'Too many codes requested. Try again in an hour.');
     }
-    const code = newOtp();
+    // the store reviewers' number: a fixed code they were given, no SMS
+    const reviewer = !!config.REVIEW_PHONE && !!config.REVIEW_OTP && phone === config.REVIEW_PHONE;
+    const code = reviewer ? config.REVIEW_OTP! : newOtp();
     await db.insert(otpCodes).values({ phone, codeHash: hashOtp(phone, code), expiresAt: new Date(Date.now() + OTP_TTL_MS) });
-    const delivery = await sendOtp(phone, code, req.log, (await getSettings(db)).testLogin);
+    const delivery = reviewer ? { sent: true as const } : await sendOtp(phone, code, req.log, (await getSettings(db)).testLogin);
     return { sent: true, resendInSec: OTP_RESEND_SEC, ...(delivery.devCode ? { devCode: delivery.devCode } : {}) };
   });
 

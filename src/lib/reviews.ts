@@ -1,15 +1,16 @@
-import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, notInArray, sql, type SQL } from 'drizzle-orm';
 
 import type { Db } from '../db/client.js';
-import { productReviews, products, users } from '../db/schema.js';
+import { productReviews, products, userBlocks, users } from '../db/schema.js';
 
 /**
  * Each customer's latest review of each product: a customer who rated a product from several orders
- * counts once, with what they said most recently.
+ * counts once, with what they said most recently. Reviews hidden after a report are left out.
  */
 function latestPerCustomer(db: Db, where: SQL) {
   return db
     .selectDistinctOn([productReviews.userId, productReviews.productId], {
+      id: productReviews.id,
       productId: productReviews.productId,
       userId: productReviews.userId,
       rating: productReviews.rating,
@@ -17,7 +18,7 @@ function latestPerCustomer(db: Db, where: SQL) {
       at: productReviews.updatedAt,
     })
     .from(productReviews)
-    .where(where)
+    .where(and(where, isNull(productReviews.hiddenAt)))
     .orderBy(productReviews.userId, productReviews.productId, desc(productReviews.updatedAt), desc(productReviews.id))
     .as('latest');
 }
@@ -68,20 +69,23 @@ export function reviewerName(name: string | null) {
 
 /**
  * The product page's "Ratings & reviews": the average, how many people rated it, how many gave each
- * number of stars (5 down to 1), and the latest reviews with words.
+ * number of stars (5 down to 1), and the latest reviews with words. A logged-in viewer doesn't see the
+ * words of people they blocked, and their own reviews are marked (no "Report" on those).
  */
-export async function reviewSummary(db: Db, productId: number) {
+export async function reviewSummary(db: Db, productId: number, viewerId: number | null = null) {
   const latest = latestPerCustomer(db, eq(productReviews.productId, productId));
+  const withWords = sql`coalesce(trim(${latest.comment}), '') <> ''`;
+  const blocked = viewerId == null ? [] : (await db.select({ id: userBlocks.blockedUserId }).from(userBlocks).where(eq(userBlocks.userId, viewerId))).map((b) => b.id);
   const [counts, recent] = await Promise.all([
     db
       .select({ rating: latest.rating, n: sql<number>`count(*)::int` })
       .from(latest)
       .groupBy(latest.rating),
     db
-      .select({ rating: latest.rating, comment: latest.comment, at: latest.at, name: users.name })
+      .select({ id: latest.id, userId: latest.userId, rating: latest.rating, comment: latest.comment, at: latest.at, name: users.name })
       .from(latest)
       .innerJoin(users, eq(users.id, latest.userId))
-      .where(sql`coalesce(trim(${latest.comment}), '') <> ''`)
+      .where(blocked.length ? and(withWords, notInArray(latest.userId, blocked)) : withWords)
       .orderBy(desc(latest.at))
       .limit(5),
   ]);
@@ -93,6 +97,13 @@ export async function reviewSummary(db: Db, productId: number) {
     count,
     /** how many gave 5, 4, 3, 2 and 1 stars */
     stars,
-    recent: recent.map((r) => ({ name: reviewerName(r.name), rating: r.rating, comment: r.comment!.trim(), at: r.at.toISOString() })),
+    recent: recent.map((r) => ({
+      id: r.id,
+      name: reviewerName(r.name),
+      rating: r.rating,
+      comment: r.comment!.trim(),
+      at: r.at.toISOString(),
+      byYou: viewerId != null && r.userId === viewerId,
+    })),
   };
 }

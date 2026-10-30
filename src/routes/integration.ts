@@ -1,13 +1,14 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-import { and, desc, eq, gte, ilike, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, inArray, isNotNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import type { Db } from '../db/client.js';
-import { brands, categories, orderEvents, orderItems, orders, products, users, type Spec } from '../db/schema.js';
+import { brands, categories, orderEvents, orderItems, orders, productReviews, products, reviewReports, users, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
 import { categoriesOf, inCategories, setProductCategories } from '../lib/categories.js';
+import { refreshProductRatings } from '../lib/reviews.js';
 import { changeOrderStatus, NEXT_STATUS } from './orders.js';
 
 /**
@@ -445,6 +446,61 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           req.body,
         );
         await changeOrderStatus(db, number, body.status, body.note || undefined);
+        return { ok: true };
+      });
+
+      // ---- Reported reviews ----
+      // A customer's "Report review" hides it at once; staff keep it hidden (remove) or show it again (restore).
+      scope.get('/review-reports', async () => {
+        const rows = await db
+          .select({
+            id: productReviews.id,
+            rating: productReviews.rating,
+            comment: productReviews.comment,
+            hiddenAt: productReviews.hiddenAt,
+            createdAt: productReviews.createdAt,
+            productName: products.name,
+            productSku: products.sku,
+            authorName: users.name,
+            reports: sql<number>`(select count(*)::int from ${reviewReports} where ${reviewReports.reviewId} = ${productReviews.id})`,
+            reasons: sql<string[]>`(select coalesce(array_agg(distinct ${reviewReports.reason}), '{}') from ${reviewReports} where ${reviewReports.reviewId} = ${productReviews.id})`,
+          })
+          .from(productReviews)
+          .innerJoin(products, eq(products.id, productReviews.productId))
+          .innerJoin(users, eq(users.id, productReviews.userId))
+          .where(isNotNull(productReviews.hiddenAt))
+          .orderBy(desc(productReviews.hiddenAt))
+          .limit(200);
+        return {
+          data: rows.map((r) => ({
+            id: r.id,
+            rating: r.rating,
+            comment: r.comment,
+            product_name: r.productName,
+            product_sku: r.productSku,
+            author_name: r.authorName,
+            reports: r.reports,
+            reasons: r.reasons,
+            hidden_at: iso(r.hiddenAt),
+            created_at: iso(r.createdAt),
+          })),
+        };
+      });
+
+      scope.post('/reviews/:id/restore', async (req) => {
+        const { id } = parse(z.object({ id: z.coerce.number().int().positive() }), req.params);
+        const [r] = await db.update(productReviews).set({ hiddenAt: null }).where(eq(productReviews.id, id)).returning({ productId: productReviews.productId });
+        if (!r) throw new HttpError(404, 'not_found', 'Review not found.');
+        await db.delete(reviewReports).where(eq(reviewReports.reviewId, id));
+        await refreshProductRatings(db, [r.productId]);
+        return { ok: true };
+      });
+
+      scope.delete('/reviews/:id', async (req) => {
+        const { id } = parse(z.object({ id: z.coerce.number().int().positive() }), req.params);
+        const [r] = await db.delete(productReviews).where(eq(productReviews.id, id)).returning({ productId: productReviews.productId });
+        if (!r) throw new HttpError(404, 'not_found', 'Review not found.');
+        await refreshProductRatings(db, [r.productId]);
         return { ok: true };
       });
     },

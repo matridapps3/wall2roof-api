@@ -16,6 +16,7 @@ import { imageRoutes } from './routes/images.js';
 import { integrationRoutes } from './routes/integration.js';
 import { orderRoutes } from './routes/orders.js';
 import { pageRoutes } from './routes/pages.js';
+import { reviewRoutes } from './routes/reviews.js';
 import { voiceRoutes } from './routes/voice.js';
 
 export type AppDeps = {
@@ -80,6 +81,7 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
   await orderRoutes(app, { db, voice });
   await accountRoutes(app, { db, voice });
   await pageRoutes(app, { db });
+  await reviewRoutes(app, { db });
   await integrationRoutes(app, { db, key: 'integrationKey' in deps ? deps.integrationKey : config.WALL2ROOF_ADMIN_KEY });
 
   return app;

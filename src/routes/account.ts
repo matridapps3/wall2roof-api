@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -14,7 +14,9 @@ import {
   products,
   refreshTokens,
   returnRequests,
+  reviewReports,
   supportMessages,
+  userBlocks,
   users,
   wishlist,
 } from '../db/schema.js';
@@ -116,6 +118,8 @@ export async function accountRoutes(app: FastifyInstance, { db, voice }: { db: D
     }
     const rated = await db.transaction(async (tx) => {
       const reviews = await tx.delete(productReviews).where(eq(productReviews.userId, userId)).returning({ productId: productReviews.productId });
+      await tx.delete(reviewReports).where(eq(reviewReports.userId, userId));
+      await tx.delete(userBlocks).where(or(eq(userBlocks.userId, userId), eq(userBlocks.blockedUserId, userId)));
       await tx.delete(addresses).where(eq(addresses.userId, userId));
       await tx.delete(cartItems).where(eq(cartItems.userId, userId));
       await tx.delete(wishlist).where(eq(wishlist.userId, userId));

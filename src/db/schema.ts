@@ -433,9 +433,43 @@ export const productReviews = pgTable(
     /** 1 to 5 stars */
     rating: integer('rating').notNull(),
     comment: text('comment'),
+    /** Hidden from everyone: a customer reported it (staff check it and restore or remove it). */
+    hiddenAt: timestamp('hidden_at', { withTimezone: true }),
     ...timestamps,
   },
   (t) => [uniqueIndex('product_reviews_user_product_order_uq').on(t.userId, t.productId, t.orderId), index('product_reviews_product_idx').on(t.productId)],
+);
+
+/** "Report review" from the product page: why a customer reported a review (one report per customer). */
+export const reviewReports = pgTable(
+  'review_reports',
+  {
+    id: serial('id').primaryKey(),
+    reviewId: integer('review_id')
+      .notNull()
+      .references(() => productReviews.id, { onDelete: 'cascade' }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    reason: text('reason', { enum: ['offensive', 'spam', 'not_about_product', 'other'] }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('review_reports_review_user_uq').on(t.reviewId, t.userId)],
+);
+
+/** "Block this person": the customer no longer sees reviews written by the blocked customer. */
+export const userBlocks = pgTable(
+  'user_blocks',
+  {
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    blockedUserId: integer('blocked_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.blockedUserId] })],
 );
 
 export const supportMessages = pgTable('support_messages', {

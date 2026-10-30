@@ -25,6 +25,12 @@ const schema = z.object({
   OTP_PROVIDER: z.enum(['console', 'test', 'msg91']).default('console'),
   MSG91_AUTH_KEY: z.string().optional(),
   MSG91_TEMPLATE_ID: z.string().optional(),
+  /**
+   * The App Store / Play Store reviewers' login once real SMS is on: this one number logs in with
+   * REVIEW_OTP and gets no SMS. Both unset = no such number.
+   */
+  REVIEW_PHONE: z.string().regex(/^[6-9]\d{9}$/, '10-digit mobile number').optional(),
+  REVIEW_OTP: z.string().regex(/^\d{6}$/, '6 digits').optional(),
   CORS_ORIGINS: z.string().default('*'),
   /**
    * Shared secret for the Wall2Roof admin integration API (/v1/integration).

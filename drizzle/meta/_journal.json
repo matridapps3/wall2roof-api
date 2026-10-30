@@ -64,6 +64,13 @@
       "when": 1793190037965,
       "tag": "0008_account_deletion",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793337395122,
+      "tag": "0009_review_moderation",
+      "breakpoints": true
     }
   ]
 }
