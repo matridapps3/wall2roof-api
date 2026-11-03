@@ -5,11 +5,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import type { Db } from '../db/client.js';
-import { brands, categories, orderEvents, orderItems, orders, productReviews, products, reviewReports, users, type Spec } from '../db/schema.js';
+import { brands, categories, orderItems, orders, productReviews, products, reviewReports, users, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
 import { categoriesOf, inCategories, setProductCategories } from '../lib/categories.js';
 import { refreshProductRatings } from '../lib/reviews.js';
-import { changeOrderStatus, NEXT_STATUS } from './orders.js';
+import { changeOrderStatus, loadStoreOrder } from './orders.js';
 
 /**
  * Server-to-server API for the Wall2Roof admin ("ElectroDash view").
@@ -387,17 +387,7 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
 
       scope.get('/orders/:number', async (req) => {
         const { number } = parse(z.object({ number: z.string().max(40) }), req.params);
-        const [row] = await db
-          .select({ o: orders, u: users })
-          .from(orders)
-          .innerJoin(users, eq(users.id, orders.userId))
-          .where(eq(orders.number, number));
-        if (!row) throw new HttpError(404, 'not_found', 'Order not found.');
-        const { o, u } = row;
-        const [items, events] = await Promise.all([
-          db.select().from(orderItems).where(eq(orderItems.orderId, o.id)).orderBy(orderItems.id),
-          db.select().from(orderEvents).where(eq(orderEvents.orderId, o.id)).orderBy(orderEvents.createdAt, orderEvents.id),
-        ]);
+        const { o, u, items, events, nextStatuses } = await loadStoreOrder(db, number);
         return {
           number: o.number,
           status: o.status,
@@ -430,7 +420,7 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           /** path on this server, e.g. /voice/12/<id>.m4a */
           voice_note: o.voiceNote ? `/voice/${o.voiceNote}` : null,
           events: events.map((e) => ({ status: e.status, note: e.note, created_at: iso(e.createdAt) })),
-          next_statuses: NEXT_STATUS[o.status],
+          next_statuses: nextStatuses,
           created_at: iso(o.createdAt),
           updated_at: iso(o.updatedAt),
         };
@@ -445,7 +435,7 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           }),
           req.body,
         );
-        await changeOrderStatus(db, number, body.status, body.note || undefined);
+        await changeOrderStatus(db, number, body.status, body.note || undefined, { label: 'Wall2Roof admin' });
         return { ok: true };
       });
 

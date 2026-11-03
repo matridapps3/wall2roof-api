@@ -78,6 +78,7 @@ describe('search', () => {
 
   it('suggests categories matching every word', async () => {
     const res = await app.inject({ method: 'GET', url: '/v1/search/suggest?q=hanging%20light' });
-    expect(res.json().categories.map((c: any) => c.slug)).toEqual(['hanging-lights']);
+    // the name match first, then W1's main category (W1 is also listed under Hanging Lights)
+    expect(res.json().categories.map((c: any) => c.slug)).toEqual(['hanging-lights', 'wall-lights']);
   });
 });

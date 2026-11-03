@@ -5,7 +5,7 @@ import { jwtVerify, SignJWT } from 'jose';
 
 import { config } from '../config.js';
 
-export type AccessClaims = { sub: string; role: 'customer' | 'admin' };
+export type AccessClaims = { sub: string; role: 'customer' | 'staff' | 'admin' };
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 10);
@@ -29,7 +29,7 @@ export async function verifyAccessToken(token: string): Promise<AccessClaims | n
   try {
     const { payload } = await jwtVerify(token, config.jwtSecret, { issuer: 'electrodash' });
     if (typeof payload.sub !== 'string') return null;
-    const role = payload.role === 'admin' ? 'admin' : 'customer';
+    const role = payload.role === 'admin' || payload.role === 'staff' ? payload.role : 'customer';
     return { sub: payload.sub, role };
   } catch {
     return null;

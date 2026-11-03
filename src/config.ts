@@ -53,6 +53,13 @@ const schema = z.object({
   RAILWAY_PUBLIC_DOMAIN: z.string().optional(),
   /** `off` stops the background job that copies outside images onto this server. */
   IMAGE_IMPORT: z.enum(['on', 'off']).default('on'),
+  /**
+   * Email alerts to staff (new orders, Contact us messages) through Resend's HTTPS API — Railway
+   * blocks SMTP. ALERT_EMAIL_TO is comma-separated. Key or recipients unset = no email.
+   */
+  RESEND_API_KEY: z.string().optional(),
+  MAIL_FROM: z.string().default('ElectroDash <onboarding@resend.dev>'),
+  ALERT_EMAIL_TO: z.string().optional(),
 });
 
 // Treat blank lines in .env (e.g. `DATABASE_URL=`) as "not set".
@@ -91,6 +98,11 @@ export const config = {
    * address) — never from a developer's PC, which shares the production database.
    */
   imageImport: env.IMAGE_IMPORT === 'on' && imagesPersistent && !!publicUrl?.startsWith('https://'),
+  /** Who gets the staff email alerts (ALERT_EMAIL_TO split at commas). */
+  alertEmailTo: (env.ALERT_EMAIL_TO ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   isProd: env.NODE_ENV === 'production',
   isTest: env.NODE_ENV === 'test',
   jwtSecret: new TextEncoder().encode(env.JWT_SECRET ?? 'dev-only-secret-change-me-dev-only-secret'),

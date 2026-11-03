@@ -48,6 +48,13 @@ export function requireAdmin(req: FastifyRequest): number {
   return id;
 }
 
+/** Store staff, or an admin: the staff order screens. */
+export function requireStaff(req: FastifyRequest): number {
+  const id = requireUser(req);
+  if (req.auth?.role !== 'staff' && req.auth?.role !== 'admin') throw new HttpError(403, 'forbidden', 'Staff only.');
+  return id;
+}
+
 export function sendError(reply: FastifyReply, e: HttpError) {
   return reply.status(e.status).send({ error: { code: e.code, message: e.message } });
 }

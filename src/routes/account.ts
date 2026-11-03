@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -8,6 +8,7 @@ import {
   brands,
   cartItems,
   notifications,
+  orderEvents,
   orders,
   otpCodes,
   productReviews,
@@ -22,6 +23,7 @@ import {
 } from '../db/schema.js';
 import { HttpError, idParam, parse, requireUser } from '../http.js';
 import { hashPassword, isStrongEnough, normalizeIndianMobile, PASSWORD_RULE } from '../lib/auth.js';
+import { alertStaff, supportMail, type Mailer } from '../lib/mailer.js';
 import { refreshProductRatings } from '../lib/reviews.js';
 import type { VoiceStore } from '../lib/voice.js';
 import { publicUser } from './auth.js';
@@ -30,7 +32,8 @@ import { productCard } from './catalog.js';
 const addressBody = z.object({
   label: z.enum(['home', 'work', 'other']).default('home'),
   otherLabel: z.string().trim().max(30).nullish(),
-  name: z.string().trim().min(1, 'Enter a name').max(80),
+  /** the receiver; may be empty when the customer delivers to themselves (orders then use their account name) */
+  name: z.string().trim().max(80).default(''),
   phone: z.string().transform((v, ctx) => {
     const n = normalizeIndianMobile(v);
     if (!n) ctx.addIssue({ code: 'custom', message: 'Enter a valid 10-digit mobile number' });
@@ -54,8 +57,10 @@ function addressOut(a: typeof addresses.$inferSelect) {
 /** Orders still being delivered and returns still being handled: the account can't be deleted until they're done. */
 const OPEN_ORDER = ['placed', 'confirmed', 'packed', 'out_for_delivery'] as const;
 const OPEN_RETURN = ['requested', 'approved'] as const;
+/** Contact us emails a day from people who aren't logged in; past this the message is kept but not emailed. */
+const ANON_SUPPORT_EMAILS_PER_DAY = 20;
 
-export async function accountRoutes(app: FastifyInstance, { db, voice }: { db: Db; voice: VoiceStore }) {
+export async function accountRoutes(app: FastifyInstance, { db, voice, mailer }: { db: Db; voice: VoiceStore; mailer?: Mailer | null }) {
   app.get('/v1/me', async (req) => {
     const userId = requireUser(req);
     const [u] = await db.select().from(users).where(eq(users.id, userId));
@@ -135,6 +140,8 @@ export async function accountRoutes(app: FastifyInstance, { db, voice }: { db: D
         })
         .where(eq(orders.userId, userId));
       await tx.update(supportMessages).set({ name: 'Deleted customer', email: '', phone: null }).where(eq(supportMessages.userId, userId));
+      // a staff member's name or phone on the orders they moved along goes too
+      await tx.update(orderEvents).set({ actorUserId: null, actorLabel: null }).where(eq(orderEvents.actorUserId, userId));
       const now = new Date();
       await tx
         .update(users)
@@ -306,7 +313,22 @@ export async function accountRoutes(app: FastifyInstance, { db, voice }: { db: D
     if (!body.email && !body.phone && !userId) {
       throw new HttpError(400, 'contact_required', 'Add an email or phone number so we can reply.');
     }
-    await db.insert(supportMessages).values({ ...body, name: body.name ?? '', email: body.email ?? '', userId });
+    const [msg] = await db
+      .insert(supportMessages)
+      .values({ ...body, name: body.name ?? '', email: body.email ?? '', userId })
+      .returning();
+    // Anyone can post here without logging in, so those emails are capped: spam can't use up the
+    // email allowance the order alerts need.
+    const [{ n }] = userId
+      ? [{ n: 0 }]
+      : await db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(supportMessages)
+          .where(and(isNull(supportMessages.userId), gt(supportMessages.createdAt, new Date(Date.now() - 86_400_000))));
+    // email it to staff (Reply goes to the customer's email when they gave one)
+    if (n <= ANON_SUPPORT_EMAILS_PER_DAY) {
+      alertStaff(mailer, () => supportMail(msg), (err) => req.log.error({ err }, 'support email failed'));
+    }
     reply.status(201);
     return { ok: true };
   });

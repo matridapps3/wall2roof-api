@@ -22,7 +22,8 @@ import { config } from '../config.js';
 import { checkSentOtp, sendOtp, type OtpDelivery } from '../lib/otp-sender.js';
 import { getSettings } from '../lib/settings.js';
 
-const OTP_TTL_MS = 5 * 60_000;
+/** 10 minutes, as the login SMS says ("valid for 10 minutes"). */
+const OTP_TTL_MS = 10 * 60_000;
 const OTP_RESEND_SEC = 30;
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_MAX_PER_HOUR = 5;
@@ -36,6 +37,8 @@ export function publicUser(u: typeof users.$inferSelect) {
     hasPassword: !!u.passwordHash,
     notifyOffers: u.notifyOffers,
     memberSince: u.createdAt.toISOString(),
+    /** staff and admin get the "Store orders" screens in the app */
+    role: u.role,
   };
 }
 

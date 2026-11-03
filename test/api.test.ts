@@ -256,6 +256,24 @@ describe('auth', () => {
     expect(bad.body.error.code).toBe('otp_wrong');
   });
 
+  it('a code works for 10 minutes, as the SMS says', async () => {
+    /** Pretend the phone's code was sent `minutes` ago (its expiry moves back the same amount). */
+    async function sentAgo(phone: string, minutes: number) {
+      for (const o of await h.db.select().from(otpCodes).where(eq(otpCodes.phone, phone))) {
+        const back = (d: Date) => new Date(d.getTime() - minutes * 60_000);
+        await h.db.update(otpCodes).set({ createdAt: back(o.createdAt), expiresAt: back(o.expiresAt) }).where(eq(otpCodes.id, o.id));
+      }
+    }
+    const recent = await call('POST', '/v1/auth/otp/request', { phone: '9811100033' });
+    await sentAgo('9811100033', 7);
+    expect((await call('POST', '/v1/auth/otp/verify', { phone: '9811100033', code: recent.body.devCode })).status).toBe(200);
+
+    const old = await call('POST', '/v1/auth/otp/request', { phone: '9811100044' });
+    await sentAgo('9811100044', 11);
+    const late = await call('POST', '/v1/auth/otp/verify', { phone: '9811100044', code: old.body.devCode });
+    expect([late.status, late.body.error.code]).toEqual([400, 'otp_expired']);
+  });
+
   it('rejects invalid phone numbers', async () => {
     expect((await call('POST', '/v1/auth/otp/request', { phone: '12345' })).status).toBe(400);
   });

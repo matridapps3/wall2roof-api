@@ -132,7 +132,8 @@ export const users = pgTable(
     email: text('email'),
     passwordHash: text('password_hash'),
     phoneVerifiedAt: timestamp('phone_verified_at', { withTimezone: true }),
-    role: text('role', { enum: ['customer', 'admin'] }).notNull().default('customer'),
+    /** `staff` see the store's orders in the app and move them along; `admin` can do that too. */
+    role: text('role', { enum: ['customer', 'staff', 'admin'] }).notNull().default('customer'),
     notifyOffers: boolean('notify_offers').notNull().default(false),
     /**
      * When the customer deleted their account in the app: name, phone, email and password are wiped
@@ -381,6 +382,10 @@ export const orderEvents = pgTable('order_events', {
     .references(() => orders.id, { onDelete: 'cascade' }),
   status: orderStatusEnum('status').notNull(),
   note: text('note'),
+  /** The staff member or admin who made this change (null for the customer's own steps, or when unknown). */
+  actorUserId: integer('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
+  /** Who that was, as staff see it: their name (else phone), or "Wall2Roof admin". Never shown to customers. */
+  actorLabel: text('actor_label'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

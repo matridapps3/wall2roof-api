@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import type { Db } from '../db/client.js';
+import { esc } from '../lib/html.js';
 import { getSettings, type StoreSettings } from '../lib/settings.js';
 
 /**
@@ -16,9 +17,7 @@ const BUSINESS = {
   grievanceOfficer: 'Vivek Kumar',
 };
 /** Shown at the top of the privacy policy; change it whenever the policy changes. */
-const POLICY_UPDATED = '29 October 2026';
-
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+const POLICY_UPDATED = '3 November 2026';
 
 function page(title: string, body: string) {
   return `<!doctype html>
@@ -96,12 +95,12 @@ function privacyHtml(s: StoreSettings) {
 <h2>Who sees it</h2>
 <ul>
   <li><strong>Our store staff and delivery partners</strong> see what they need for your order: name, phone, address, items and delivery instructions.</li>
-  <li><strong>Service providers</strong> that run the app for us: cloud hosting and storage, the SMS service that sends login codes, and Expo (which delivers app updates). They may use the data only to provide their service to us.</li>
+  <li><strong>Service providers</strong> that run the app for us: cloud hosting and storage, the SMS service that sends login codes, the email service that sends our staff order alerts, and Expo (which delivers app updates). They may use the data only to provide their service to us.</li>
   <li><strong>Authorities</strong>, when the law requires it.</li>
 </ul>
 
 <h2>How long we keep it</h2>
-<p>We keep your account data until you delete your account. Order and invoice records are kept for as long as GST and tax law requires, even after you delete your account, but without your name, phone number and street address.</p>
+<p>We keep your account data until you delete your account. Order and invoice records are kept for as long as GST and tax law requires, even after you delete your account, but without your name, phone number and street address. The order alert emails sent to our staff keep the name, phone number and address given for that order; deleting your account does not remove them.</p>
 
 <h2>Delete your account</h2>
 <p>In the app, go to <strong>Account → Delete account</strong> (<a href="/delete-account">how to delete your account</a>). This permanently removes your name, mobile number, email, saved addresses, cart, wishlist, notifications, ratings, voice instructions and login sessions. Past orders stay as sales records without your personal details. If an order is still on its way, you can delete your account once it is delivered or cancelled. You can also ask us to delete it using the contact details below.</p>

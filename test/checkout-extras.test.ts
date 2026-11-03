@@ -130,4 +130,29 @@ describe('checkout extras', () => {
     expect(play.rawPayload.equals(m4a)).toBe(true);
     expect((await app.inject({ method: 'GET', url: `/voice/${userId}/${'0'.repeat(32)}.m4a` })).statusCode).toBe(404);
   });
+
+  it('an address for the customer themselves may have no receiver name; the order uses their account name', async () => {
+    const place = { label: 'work', phone: '9876500001', line1: '12, Phase 8B', city: 'Mohali', state: 'Punjab', pincode: '140306' };
+    const blank = await call('POST', '/v1/addresses', { ...place, name: ' ' }, token);
+    expect([blank.status, blank.body.address.name]).toEqual([201, '']);
+    const missing = await call('POST', '/v1/addresses', place, token);
+    expect([missing.status, missing.body.address.name]).toEqual([201, '']);
+    expect((await call('POST', '/v1/addresses', { ...place, name: 'x'.repeat(81) }, token)).status).toBe(400);
+    // the phone is still needed
+    expect((await call('POST', '/v1/addresses', { ...place, name: '', phone: '' }, token)).status).toBe(400);
+
+    await call('PUT', '/v1/cart/items', { productId: bulbId, qty: 1 }, token);
+    const o = await call('POST', '/v1/orders', { addressId: blank.body.address.id, paymentMethod: 'cod', idempotencyKey: 'no-name-1' }, token);
+    expect(o.status).toBe(201);
+    expect(o.body.address).toMatchObject({ name: 'Priya', phone: '9876500001', line1: '12, Phase 8B' });
+
+    // an account with no name yet: the order goes out with just the phone
+    const [nameless] = await h.db.insert(users).values({ phone: '9876500003' }).returning();
+    const theirToken = await signAccessToken(nameless.id, 'customer');
+    const theirs = await call('POST', '/v1/addresses', { ...place, phone: '9876500003' }, theirToken);
+    await call('PUT', '/v1/cart/items', { productId: bulbId, qty: 1 }, theirToken);
+    const o2 = await call('POST', '/v1/orders', { addressId: theirs.body.address.id, paymentMethod: 'cod', idempotencyKey: 'no-name-2' }, theirToken);
+    expect(o2.status).toBe(201);
+    expect(o2.body.address).toMatchObject({ name: '', phone: '9876500003' });
+  });
 });

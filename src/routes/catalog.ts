@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { banners, brands, categories, homeSections, orderItems, products, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
-import { categoryKind, categoryMembers, inCategories, subtreeCount } from '../lib/categories.js';
+import { categoriesOf, categoryKind, categoryMembers, inCategories, subtreeCount } from '../lib/categories.js';
 import { facetAndFilter, isFiltering, parsePicked } from '../lib/filters.js';
 import { htmlToText } from '../lib/html.js';
 import { reviewSummary } from '../lib/reviews.js';
@@ -189,6 +189,23 @@ function searchCondition(q: string): SQL {
       )!;
     }),
   )!;
+}
+
+type SuggestCategory = { id: number; name: string; sort: number };
+
+/**
+ * The category rows in search suggestions: categories whose own name has every typed word come
+ * first, then the categories the matching products are in ("surface light" → Ceiling Lights).
+ * Each group is ranked by how many matching products it holds; a category holding none is left
+ * out, so a row never opens an empty page.
+ */
+export function rankSuggestCategories<C extends SuggestCategory>(named: C[], others: C[], counts: Map<number, number>, max = 3): C[] {
+  const count = (c: C) => counts.get(c.id) ?? 0;
+  const ranked = (list: C[]) =>
+    list.filter((c) => count(c) > 0).sort((a, b) => count(b) - count(a) || a.sort - b.sort || a.name.localeCompare(b.name));
+  const first = ranked(named);
+  const seen = new Set(first.map((c) => c.id));
+  return [...first, ...ranked(others.filter((c) => !seen.has(c.id)))].slice(0, max);
 }
 
 type CardRow = { p: typeof products.$inferSelect; brandName: string | null };
@@ -430,7 +447,8 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
 
   app.get('/v1/search/suggest', async (req) => {
     const { q } = parse(z.object({ q: z.string().trim().min(1).max(100) }), req.query);
-    const [items, cats] = await Promise.all([
+    const catFields = { id: categories.id, slug: categories.slug, name: categories.name, imageUrl: categories.imageUrl, sort: categories.sort };
+    const [items, named, matching] = await Promise.all([
       db
         .select({ p: products, brandName: brands.name })
         .from(products)
@@ -439,14 +457,28 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         .orderBy(desc(products.isBestseller), desc(products.ratingCount))
         .limit(6),
       db
-        .select({ slug: categories.slug, name: categories.name })
+        .select(catFields)
         .from(categories)
-        .where(and(eq(categories.isActive, true), ...searchStems(q).map((w) => ilike(categories.name, `%${w}%`))))
-        .limit(3),
+        .where(and(eq(categories.isActive, true), ...searchStems(q).map((w) => ilike(categories.name, `%${w}%`)))),
+      // every matching product, to count them per category (main and extra categories)
+      db
+        .select({ id: products.id, categoryId: products.categoryId })
+        .from(products)
+        .leftJoin(brands, eq(brands.id, products.brandId))
+        .where(and(eq(products.isActive, true), searchCondition(q))),
     ]);
+    const counts = new Map<number, number>();
+    for (const ids of (await categoriesOf(db, matching)).values()) for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+    const missing = [...counts.keys()].filter((id) => !named.some((c) => c.id === id));
+    const others = missing.length
+      ? await db
+          .select(catFields)
+          .from(categories)
+          .where(and(inArray(categories.id, missing), eq(categories.isActive, true)))
+      : [];
     return {
       products: items.map((r) => productCard(r.p, r.brandName ? { name: r.brandName } : null)),
-      categories: cats,
+      categories: rankSuggestCategories(named, others, counts).map((c) => ({ slug: c.slug, name: c.name, imageUrl: c.imageUrl })),
     };
   });
 

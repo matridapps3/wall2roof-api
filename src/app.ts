@@ -5,6 +5,7 @@ import { config } from './config.js';
 import type { Db } from './db/client.js';
 import { HttpError, readAuth, sendError } from './http.js';
 import { ImageStore } from './lib/images.js';
+import { defaultMailer, type Mailer } from './lib/mailer.js';
 import { VoiceStore } from './lib/voice.js';
 import { isTestLogin } from './lib/otp-sender.js';
 import { getSettings } from './lib/settings.js';
@@ -17,6 +18,7 @@ import { integrationRoutes } from './routes/integration.js';
 import { orderRoutes } from './routes/orders.js';
 import { pageRoutes } from './routes/pages.js';
 import { reviewRoutes } from './routes/reviews.js';
+import { staffRoutes } from './routes/staff.js';
 import { voiceRoutes } from './routes/voice.js';
 
 export type AppDeps = {
@@ -26,6 +28,8 @@ export type AppDeps = {
   images?: ImageStore;
   /** Recorded delivery instructions; defaults to the voice folder on the Railway volume. */
   voice?: VoiceStore;
+  /** Staff email alerts; defaults to Resend when RESEND_API_KEY and ALERT_EMAIL_TO are set (none in tests). */
+  mailer?: Mailer | null;
 };
 
 export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: AppDeps = {}) {
@@ -78,8 +82,10 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
   await cartRoutes(app, { db });
   const voice = deps.voice ?? new VoiceStore(config.voiceDir);
   await voiceRoutes(app, { store: voice });
-  await orderRoutes(app, { db, voice });
-  await accountRoutes(app, { db, voice });
+  const mailer = 'mailer' in deps ? deps.mailer : defaultMailer();
+  await orderRoutes(app, { db, voice, mailer });
+  await accountRoutes(app, { db, voice, mailer });
+  await staffRoutes(app, { db });
   await pageRoutes(app, { db });
   await reviewRoutes(app, { db });
   await integrationRoutes(app, { db, key: 'integrationKey' in deps ? deps.integrationKey : config.WALL2ROOF_ADMIN_KEY });
