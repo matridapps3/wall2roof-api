@@ -15,6 +15,8 @@ export type StoreSettings = FeeSettings & {
   /** Empty list = deliver to every PIN code. */
   serviceablePincodes: string[];
   supportPhone: string;
+  /** The WhatsApp number customers can message: a 10-digit Indian mobile. Empty = none. */
+  supportWhatsapp: string;
   supportEmail: string;
   supportHoursText: string;
   codEnabled: boolean;
@@ -48,6 +50,7 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   storeAreaText: '',
   serviceablePincodes: [],
   supportPhone: '',
+  supportWhatsapp: '',
   supportEmail: '',
   supportHoursText: '',
   codEnabled: true,
@@ -61,7 +64,11 @@ export const DEFAULT_SETTINGS: StoreSettings = {
 export async function getSettings(db: Db): Promise<StoreSettings> {
   const rows = await db.select().from(settings);
   const out: Record<string, unknown> = { ...DEFAULT_SETTINGS };
-  for (const r of rows) if (r.key in DEFAULT_SETTINGS) out[r.key] = r.value;
+  for (const r of rows) {
+    if (!(r.key in DEFAULT_SETTINGS)) continue;
+    // drizzle parses jsonb twice, so a text setting of only digits ("9814012345") comes back as a number
+    out[r.key] = typeof out[r.key] === 'string' && typeof r.value === 'number' ? String(r.value) : r.value;
+  }
   return out as StoreSettings;
 }
 

@@ -314,7 +314,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
       codFeePaise: s.codFeePaise,
       codEnabled: s.codEnabled,
       onlinePaymentsEnabled: s.onlinePaymentsEnabled,
-      support: { phone: s.supportPhone, email: s.supportEmail, hours: s.supportHoursText },
+      support: { phone: s.supportPhone, email: s.supportEmail, hours: s.supportHoursText, whatsapp: s.supportWhatsapp },
       /** newest APK: older apps offer to download it */
       latestApp: s.latestAppVersion && s.latestAppUrl.startsWith('https://') ? { version: s.latestAppVersion, url: s.latestAppUrl } : null,
     };
