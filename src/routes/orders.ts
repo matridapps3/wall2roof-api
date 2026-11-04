@@ -517,7 +517,7 @@ export async function orderRoutes(app: FastifyInstance, { db, voice, mailer }: {
 
   /** Admin / delivery side: move an order along its lifecycle. */
   app.post('/v1/admin/orders/:number/status', async (req) => {
-    const adminId = requireAdmin(req);
+    requireAdmin(req);
     const { number } = parse(z.object({ number: z.string().max(40) }), req.params);
     const body = parse(
       z.object({
@@ -526,15 +526,12 @@ export async function orderRoutes(app: FastifyInstance, { db, voice, mailer }: {
       }),
       req.body,
     );
-    await changeOrderStatus(db, number, body.status, body.note, await orderActor(db, adminId));
+    await changeOrderStatus(db, number, body.status, body.note);
     return { ok: true };
   });
 }
 
-/**
- * One order with its customer, items and events, for the store side. The staff app and the
- * Wall2Roof integration API both build their order page from this, so the two can't drift apart.
- */
+/** One order with its customer, items and events, for the store side (the Wall2Roof integration API's order page). */
 export async function loadStoreOrder(db: Db, number: string) {
   const [row] = await db
     .select({ o: orders, u: users })
@@ -549,32 +546,20 @@ export async function loadStoreOrder(db: Db, number: string) {
   return { ...row, items, events, nextStatuses: NEXT_STATUS[row.o.status] };
 }
 
-/** Who moved an order along: kept on its events for the staff screens, never shown to customers. */
-export type OrderActor = { userId?: number | null; label: string | null };
-
-/** A staff member or admin as the order's events record them: their name, else phone (else email). */
-export async function orderActor(db: Db, userId: number): Promise<OrderActor> {
-  const [u] = await db.select({ name: users.name, phone: users.phone, email: users.email }).from(users).where(eq(users.id, userId));
-  // no such account (the local dev:advance script signs a token for user 0): nobody to record
-  return u ? { userId, label: u.name || u.phone || u.email } : { label: null };
-}
-
-const actorFields = (a?: OrderActor) => ({ actorUserId: a?.userId ?? null, actorLabel: a?.label ?? null });
-
 /**
- * Move an order to its next status (store/admin side). Shared by the admin route, the staff
- * app and the Wall2Roof integration API so all follow the same rules: only NEXT_STATUS moves,
- * restock on cancel, COD marked paid on delivery, an order event (with who did it) and a
- * customer notification.
+ * Move an order to its next status (store/admin side). Shared by the admin
+ * route and the Wall2Roof integration API so both follow the same rules:
+ * only NEXT_STATUS moves, restock on cancel, COD marked paid on delivery,
+ * an order event and a customer notification.
  */
-export async function changeOrderStatus(db: Db, number: string, status: Exclude<Status, 'placed'>, note?: string, actor?: OrderActor) {
+export async function changeOrderStatus(db: Db, number: string, status: Exclude<Status, 'placed'>, note?: string) {
   const [o] = await db.select().from(orders).where(eq(orders.number, number));
   if (!o) throw new HttpError(404, 'not_found', 'Order not found.');
   if (!NEXT_STATUS[o.status].includes(status)) {
     throw new HttpError(409, 'invalid_transition', `Can’t move an order from ${o.status} to ${status}.`);
   }
   if (status === 'cancelled') {
-    await cancelOrder(db, o, note ?? 'Cancelled by store', actor);
+    await cancelOrder(db, o, note ?? 'Cancelled by store');
     return;
   }
   await db.transaction(async (tx) => {
@@ -588,7 +573,7 @@ export async function changeOrderStatus(db: Db, number: string, status: Exclude<
       .where(and(eq(orders.id, o.id), eq(orders.status, o.status)))
       .returning({ id: orders.id });
     if (!moved.length) throw changedMeanwhile();
-    await tx.insert(orderEvents).values({ orderId: o.id, status, note, ...actorFields(actor) });
+    await tx.insert(orderEvents).values({ orderId: o.id, status, note });
     await tx.insert(notifications).values({
       userId: o.userId,
       kind: 'order',
@@ -601,8 +586,8 @@ export async function changeOrderStatus(db: Db, number: string, status: Exclude<
 /** Someone else (another phone, the customer, Wall2Roof) changed the order after it was checked. */
 const changedMeanwhile = () => new HttpError(409, 'invalid_transition', 'This order was just updated. Refresh and try again.');
 
-/** Cancel, restock, and record it (with who did it, when it's the store). Paid online orders are marked for refund. */
-async function cancelOrder(db: Db, o: OrderRow, reason: string, actor?: OrderActor) {
+/** Cancel, restock, and record it. Paid online orders are marked for refund. */
+async function cancelOrder(db: Db, o: OrderRow, reason: string) {
   await db.transaction(async (tx) => {
     // only from the status that was checked, and before the restock: of two changes at once only
     // one goes through, so stock is never put back twice
@@ -627,7 +612,7 @@ async function cancelOrder(db: Db, o: OrderRow, reason: string, actor?: OrderAct
           .where(eq(products.id, i.productId));
       }
     }
-    await tx.insert(orderEvents).values({ orderId: o.id, status: 'cancelled', note: reason, ...actorFields(actor) });
+    await tx.insert(orderEvents).values({ orderId: o.id, status: 'cancelled', note: reason });
     await tx.insert(notifications).values({ userId: o.userId, kind: 'order', title: `Order #${o.number} cancelled`, body: reason, orderId: o.id });
   });
 }

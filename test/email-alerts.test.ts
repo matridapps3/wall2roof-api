@@ -11,7 +11,7 @@ import { config } from '../src/config.js';
 import { openDb, type DbHandle } from '../src/db/client.js';
 import { cartItems, products, supportMessages, users } from '../src/db/schema.js';
 import { signAccessToken } from '../src/lib/auth.js';
-import { defaultMailer, resendMailer, type Mail, type Mailer } from '../src/lib/mailer.js';
+import { defaultMailer, relayMailer, resendMailer, type Mail, type Mailer } from '../src/lib/mailer.js';
 
 let h: DbHandle;
 let app: FastifyInstance;
@@ -224,7 +224,7 @@ describe('Resend', () => {
   it('there is no mailer without RESEND_API_KEY or recipients, and none in tests', async () => {
     expect(config.alertEmailTo).toEqual(['vivek@matridtech.com', 'orders@example.com']);
     expect(defaultMailer()).toBeNull();
-    const live = { ...config, isTest: false };
+    const live = { ...config, isTest: false, MAIL_RELAY_URL: undefined, MAIL_RELAY_KEY: undefined };
     expect(defaultMailer({ ...live, RESEND_API_KEY: undefined })).toBeNull();
     expect(defaultMailer({ ...live, RESEND_API_KEY: 're_test_123', alertEmailTo: [] })).toBeNull();
     expect(defaultMailer({ ...live, RESEND_API_KEY: 're_test_123' })).not.toBeNull();
@@ -241,6 +241,172 @@ describe('Resend', () => {
       expect(attempts).toBe(0);
     } finally {
       await plain.close();
+    }
+  });
+});
+
+describe('Mail relay (the Wall2Roof app on Cloudways)', () => {
+  const RELAY_URL = 'https://wall2roof.example.com/api/electrodash/mail';
+  const RELAY_KEY = 'relay-test-key-0123456789abcdef0123';
+  const mail: Mail = { to: ['vivek@matridtech.com', 'orders@example.com'], subject: 'New order', text: 'Plain', html: '<p>Rich</p>' };
+  const accepted = () => new Response('{"ok":true}', { status: 202, headers: { 'Content-Type': 'application/json' } });
+  const bodyOf = (spy: { mock: { calls: unknown[][] } }, n = 0) => JSON.parse(String((spy.mock.calls[n][1] as RequestInit).body));
+
+  it('posts the email as JSON with the Bearer key, replyTo null when there is none', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    await relayMailer(RELAY_URL, RELAY_KEY).send(mail);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe(RELAY_URL);
+    expect(init?.method).toBe('POST');
+    expect(init?.headers).toMatchObject({ Authorization: `Bearer ${RELAY_KEY}`, 'Content-Type': 'application/json' });
+    expect(init?.redirect).toBe('manual');
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+    expect(bodyOf(fetchSpy)).toEqual({ to: ['vivek@matridtech.com', 'orders@example.com'], subject: 'New order', text: 'Plain', html: '<p>Rich</p>', replyTo: null });
+
+    await relayMailer(RELAY_URL, RELAY_KEY).send({ ...mail, replyTo: 'asha@example.com' });
+    expect(bodyOf(fetchSpy, 1).replyTo).toBe('asha@example.com');
+  });
+
+  it('carries the app’s alerts: Reply to the customer for Contact us, none for an order', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    const relayed = await buildApp(h.db, {}, { mailer: relayMailer(RELAY_URL, RELAY_KEY) });
+    try {
+      const r = await call('POST', '/v1/support', { email: 'asha@example.com', topic: 'delivery', message: 'Where is my order?' }, token, relayed);
+      expect(r.status).toBe(201);
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+      expect(String(fetchSpy.mock.calls[0][0])).toBe(RELAY_URL);
+      expect(bodyOf(fetchSpy)).toMatchObject({ to: ['vivek@matridtech.com', 'orders@example.com'], subject: 'Contact us · Delivery', replyTo: 'asha@example.com' });
+      expect(bodyOf(fetchSpy).text).toContain('Where is my order?');
+      expect(bodyOf(fetchSpy).html).toContain('Where is my order?');
+
+      await addToCart(1, relayed);
+      const o = await order('relay-ok-1', {}, relayed);
+      expect(o.status).toBe(201);
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+      expect(String(fetchSpy.mock.calls[1][0])).toBe(RELAY_URL);
+      expect(bodyOf(fetchSpy, 1)).toMatchObject({ subject: `New order ${o.body.number} · ₹515 · Cash on delivery`, replyTo: null });
+      expect(bodyOf(fetchSpy, 1).text).toContain('1 × 9W LED Bulb (SKU B1)');
+    } finally {
+      await relayed.close();
+    }
+  });
+
+  it('fails on anything but 2xx, and the error never has the key', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const relay = relayMailer(RELAY_URL, RELAY_KEY);
+    const answers: [number, string][] = [
+      [401, '{"error":"Wrong or missing key"}'],
+      [422, '{"error":"to: not an allowed recipient"}'],
+      [503, '{"error":"Mail relay is not set up"}'],
+      [502, '{"error":"The mail server refused the email"}'],
+    ];
+    for (const [status, body] of answers) {
+      fetchSpy.mockResolvedValueOnce(new Response(body, { status }));
+      const err = await relay.send(mail).then(() => null, (e: Error) => e);
+      expect(err?.message).toBe(`Mail relay error (${status}) ${body}`);
+      expect(`${err?.message} ${err?.stack}`).not.toContain(RELAY_KEY);
+    }
+    // a redirect (say, to a login page) is not a sent email
+    fetchSpy.mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: 'https://wall2roof.example.com/login' } }));
+    await expect(relay.send(mail)).rejects.toThrow('Mail relay error (302)');
+    // a long answer is cut to 300 characters
+    fetchSpy.mockResolvedValueOnce(new Response('x'.repeat(1000), { status: 500 }));
+    await expect(relay.send(mail)).rejects.toThrow(new Error(`Mail relay error (500) ${'x'.repeat(300)}`));
+    // even an answer that repeats the key
+    fetchSpy.mockResolvedValueOnce(new Response(`Bad header: Bearer ${RELAY_KEY}`, { status: 400 }));
+    const echoed = await relay.send(mail).then(() => null, (e: Error) => e);
+    expect(echoed?.message).toBe('Mail relay error (400) Bad header: Bearer [key]');
+  });
+
+  it('a key pasted with a line break in it never gets into the error either', async () => {
+    // Node's own fetch refuses such a header before sending anything, and quotes the header in its
+    // message (port 1 is one fetch never connects to, in case it ever did send)
+    for (const key of [`${RELAY_KEY}\nsecond-line`, `${RELAY_KEY}\nsecond-line\n`, `${RELAY_KEY}\u0000x`]) {
+      const err = await relayMailer('https://127.0.0.1:1/api/electrodash/mail', key)
+        .send(mail)
+        .then(() => null, (e: Error) => e);
+      expect(err?.message).toMatch(/^Mail relay unreachable: /);
+      expect(err?.cause).toBeUndefined();
+      expect(`${err?.message} ${err?.stack}`).not.toContain(RELAY_KEY);
+      expect(`${err?.message} ${err?.stack}`).not.toContain('second-line');
+    }
+    // a relay that can't be reached says why
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed', { cause: new Error('getaddrinfo ENOTFOUND wall2roof.example.com') }));
+    await expect(relayMailer(RELAY_URL, RELAY_KEY).send(mail)).rejects.toThrow(
+      new Error('Mail relay unreachable: fetch failed (getaddrinfo ENOTFOUND wall2roof.example.com)'),
+    );
+  });
+
+  it('picks the mailer: Resend first, else the relay (https only), else none', async () => {
+    const live = { ...config, isTest: false, RESEND_API_KEY: undefined, MAIL_RELAY_URL: undefined, MAIL_RELAY_KEY: undefined };
+    const relayVars = { MAIL_RELAY_URL: RELAY_URL, MAIL_RELAY_KEY: RELAY_KEY };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => accepted());
+    const sendsTo = async (m: Mailer | null) => {
+      expect(m).not.toBeNull();
+      await m!.send(mail);
+      return String(fetchSpy.mock.lastCall![0]);
+    };
+
+    expect(await sendsTo(defaultMailer({ ...live, RESEND_API_KEY: 're_test_123', ...relayVars }))).toBe('https://api.resend.com/emails');
+    expect(await sendsTo(defaultMailer({ ...live, ...relayVars }))).toBe(RELAY_URL);
+    expect(defaultMailer({ ...live, ...relayVars, MAIL_RELAY_URL: 'http://wall2roof.example.com/api/electrodash/mail' })).toBeNull();
+    // a typo turns email off (the server still starts), and stray spaces are forgiven
+    expect(defaultMailer({ ...live, ...relayVars, MAIL_RELAY_URL: 'wall2roof.example.com/api/electrodash/mail' })).toBeNull();
+    expect(defaultMailer({ ...live, ...relayVars, MAIL_RELAY_URL: ` ${RELAY_URL}\n` })).not.toBeNull();
+    expect(defaultMailer({ ...live, MAIL_RELAY_URL: RELAY_URL })).toBeNull();
+    expect(defaultMailer({ ...live, MAIL_RELAY_KEY: RELAY_KEY })).toBeNull();
+    expect(defaultMailer(live)).toBeNull();
+    expect(defaultMailer({ ...live, ...relayVars, alertEmailTo: [] })).toBeNull();
+    expect(defaultMailer({ ...live, ...relayVars, isTest: true })).toBeNull();
+  });
+
+  it('an order is still placed when the relay fails or can’t be reached, and the log has no key', async () => {
+    const logs: string[] = [];
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response('{"error":"The mail server refused the email"}', { status: 502 }));
+    const relayed = await buildApp(
+      h.db,
+      { logger: { level: 'error', stream: { write: (line: string) => void logs.push(line) } } },
+      { mailer: relayMailer(RELAY_URL, RELAY_KEY) },
+    );
+    try {
+      await addToCart(1, relayed);
+      const o = await order('relay-fail-1', {}, relayed);
+      expect(o.status).toBe(201);
+      expect(await h.db.$count(cartItems, eq(cartItems.userId, userId))).toBe(0);
+      await vi.waitFor(() => expect(logs.join('')).toContain('order email failed'));
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(logs.join('')).toContain('Mail relay error (502)');
+
+      // a relay that can't be reached at all doesn't fail the order either
+      fetchSpy.mockRejectedValue(new TypeError('fetch failed'));
+      await addToCart(1, relayed);
+      expect((await order('relay-down-1', {}, relayed)).status).toBe(201);
+      await vi.waitFor(() => expect(logs.filter((l) => l.includes('order email failed'))).toHaveLength(2));
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(logs.join('')).not.toContain(RELAY_KEY);
+    } finally {
+      await relayed.close();
+    }
+  });
+
+  it('a relay that doesn’t answer holds up neither an order nor a Contact us message', async () => {
+    // the relay answers only when the test says so: a request that waited for its email would never return
+    const waiting: ((r: Response) => void)[] = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>((r) => void waiting.push(r)));
+    const relayed = await buildApp(h.db, {}, { mailer: relayMailer(RELAY_URL, RELAY_KEY) });
+    try {
+      await addToCart(1, relayed);
+      expect((await order('relay-slow-1', {}, relayed)).status).toBe(201);
+      expect((await call('POST', '/v1/support', { topic: 'other', message: 'Just saying hello' }, token, relayed)).status).toBe(201);
+      await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    } finally {
+      waiting.forEach((answer) => answer(accepted()));
+      await relayed.close();
     }
   });
 });

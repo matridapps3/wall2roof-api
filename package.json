@@ -12,7 +12,6 @@
     "dev:advance": "tsx src/scripts/advance-order.ts",
     "db:check": "tsx src/scripts/db-check.ts",
     "categories:create": "tsx src/scripts/create-categories.ts",
-    "staff:set": "tsx src/scripts/set-staff.ts",
     "support:set": "tsx src/scripts/set-support-numbers.ts"
   },
   "keywords": [],

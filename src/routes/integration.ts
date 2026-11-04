@@ -435,7 +435,7 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           }),
           req.body,
         );
-        await changeOrderStatus(db, number, body.status, body.note || undefined, { label: 'Wall2Roof admin' });
+        await changeOrderStatus(db, number, body.status, body.note || undefined);
         return { ok: true };
       });
 

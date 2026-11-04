@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
+import { SignJWT } from 'jose';
 
 import { buildApp } from '../src/app.js';
 import { config } from '../src/config.js';
@@ -309,6 +310,34 @@ describe('auth', () => {
 
     await call('POST', '/v1/auth/logout', { refreshToken: r2.body.refreshToken });
     expect((await refresh(r2.body.refreshToken)).status).toBe(401);
+  });
+
+  it('an account or login that still says staff (a removed role) works as a customer', async () => {
+    const s = await otpLogin('9988776644');
+    expect(s.user).not.toHaveProperty('role');
+    // made staff in the database while that role existed
+    await h.db.update(users).set({ role: 'staff' as never }).where(eq(users.id, s.user.id));
+
+    const r = await call('POST', '/v1/auth/refresh', { refreshToken: s.refreshToken });
+    expect(r.status).toBe(200);
+    expect(r.body.user).not.toHaveProperty('role');
+    expect((await call('GET', '/v1/me', undefined, r.body.accessToken)).status).toBe(200);
+    expect((await call('POST', '/v1/admin/orders/ED-0000-00000/status', { status: 'confirmed' }, r.body.accessToken)).status).toBe(403);
+
+    await ageOtps('9988776644');
+    const again = await otpLogin('9988776644');
+    expect((await call('GET', '/v1/me', undefined, again.accessToken)).status).toBe(200);
+
+    // a login issued while the role existed
+    const old = await new SignJWT({ role: 'staff' })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject(String(s.user.id))
+      .setIssuedAt()
+      .setExpirationTime('30m')
+      .setIssuer('electrodash')
+      .sign(config.jwtSecret);
+    expect((await call('GET', '/v1/me', undefined, old)).status).toBe(200);
+    expect((await call('POST', '/v1/admin/orders/ED-0000-00000/status', { status: 'confirmed' }, old)).status).toBe(403);
   });
 
   it('requires login for account routes', async () => {

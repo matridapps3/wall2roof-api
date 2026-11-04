@@ -37,8 +37,6 @@ export function publicUser(u: typeof users.$inferSelect) {
     hasPassword: !!u.passwordHash,
     notifyOffers: u.notifyOffers,
     memberSince: u.createdAt.toISOString(),
-    /** staff and admin get the "Store orders" screens in the app */
-    role: u.role,
   };
 }
 
@@ -48,7 +46,9 @@ async function createSession(db: Db, u: typeof users.$inferSelect) {
     .insert(refreshTokens)
     .values({ userId: u.id, tokenHash: hash, expiresAt: new Date(Date.now() + config.REFRESH_TOKEN_TTL_DAYS * 86_400_000) })
     .returning({ id: refreshTokens.id });
-  return { refreshId: row.id, session: { accessToken: await signAccessToken(u.id, u.role), refreshToken: token, user: publicUser(u) } };
+  // a row may still say `staff` (a removed role): it logs in as a customer
+  const role = u.role === 'admin' ? 'admin' : 'customer';
+  return { refreshId: row.id, session: { accessToken: await signAccessToken(u.id, role), refreshToken: token, user: publicUser(u) } };
 }
 
 async function issueTokens(db: Db, u: typeof users.$inferSelect) {

@@ -3,8 +3,9 @@ import type { AddressFields } from '../db/schema.js';
 import { esc } from './html.js';
 
 /**
- * Email alerts to staff: each new order and each Contact us message. Sent through Resend's HTTPS
- * API with a plain fetch (Railway blocks SMTP). RESEND_API_KEY or ALERT_EMAIL_TO unset = no email.
+ * Email alerts to staff: each new order and each Contact us message. Sent over HTTPS with a plain
+ * fetch (Railway blocks SMTP): through Resend's API, or through the mail relay on the Wall2Roof app
+ * (Cloudways), which sends them with its own mailbox. Neither set up, or ALERT_EMAIL_TO unset = no email.
  */
 export type Mail = { to: string[]; subject: string; text: string; html: string; replyTo?: string };
 export type Mailer = { send(m: Mail): Promise<void> };
@@ -24,10 +25,65 @@ export function resendMailer(apiKey: string, from: string): Mailer {
   };
 }
 
-/** The live mailer, or null (no email) when the key or the recipients are missing, and in tests. */
-export function defaultMailer(c: Pick<typeof config, 'isTest' | 'RESEND_API_KEY' | 'MAIL_FROM' | 'alertEmailTo'> = config): Mailer | null {
-  if (c.isTest || !c.RESEND_API_KEY || !c.alertEmailTo.length) return null;
-  return resendMailer(c.RESEND_API_KEY, c.MAIL_FROM);
+/**
+ * The Wall2Roof app's POST /api/electrodash/mail: it sends the email from its own MAIL_FROM_ADDRESS
+ * and answers 202. Anything else (401, 422, 503, 502, a redirect) is an error. The key is never
+ * put in the error.
+ */
+export function relayMailer(url: string, key: string): Mailer {
+  // the key as sent, too: fetch drops whitespace (a pasted line break) from the end of a header
+  const hide = (s: string) => [key, key.replace(/[\t\n\r ]+$/, '')].reduce((t, k) => (k ? t.split(k).join('[key]') : t), s);
+  return {
+    async send(m) {
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          // Accept: so Laravel answers errors as JSON rather than redirecting
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ to: m.to, subject: m.subject, text: m.text, html: m.html, replyTo: m.replyTo ?? null }),
+          // a redirect (say, to a login page) is not a sent email
+          redirect: 'manual',
+          // generous: Wall2Roof waits on GoDaddy's mail server before answering; never retried, so no double emails
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (e) {
+        // a key with a line break in it fails here with the whole header in the message, so the
+        // original error (and its cause) is not passed on, only its text with the key taken out
+        const err = e as Error | undefined;
+        const cause = (err?.cause as Error | undefined)?.message;
+        throw new Error(hide(`Mail relay unreachable: ${err?.message ?? String(e)}${cause ? ` (${cause})` : ''}`));
+      }
+      if (!res.ok) {
+        // even an answer that echoes the key back can't put it in the log
+        const body = hide(await res.text().catch(() => ''));
+        throw new Error(`Mail relay error (${res.status}) ${body.slice(0, 300)}`);
+      }
+    },
+  };
+}
+
+/** A well-formed https:// address (MAIL_RELAY_URL is only loosely checked at startup). */
+function isHttpsUrl(raw: string): boolean {
+  try {
+    return new URL(raw.trim()).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The live mailer: Resend when RESEND_API_KEY is set, else the Wall2Roof relay when MAIL_RELAY_URL
+ * (https only) and MAIL_RELAY_KEY are set. Null (no email) when neither is, when there are no
+ * recipients, and in tests.
+ */
+export function defaultMailer(
+  c: Pick<typeof config, 'isTest' | 'RESEND_API_KEY' | 'MAIL_FROM' | 'MAIL_RELAY_URL' | 'MAIL_RELAY_KEY' | 'alertEmailTo'> = config,
+): Mailer | null {
+  if (c.isTest || !c.alertEmailTo.length) return null;
+  if (c.RESEND_API_KEY) return resendMailer(c.RESEND_API_KEY, c.MAIL_FROM);
+  if (c.MAIL_RELAY_URL && isHttpsUrl(c.MAIL_RELAY_URL) && c.MAIL_RELAY_KEY) return relayMailer(c.MAIL_RELAY_URL.trim(), c.MAIL_RELAY_KEY);
+  return null;
 }
 
 /**

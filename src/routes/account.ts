@@ -140,7 +140,7 @@ export async function accountRoutes(app: FastifyInstance, { db, voice, mailer }:
         })
         .where(eq(orders.userId, userId));
       await tx.update(supportMessages).set({ name: 'Deleted customer', email: '', phone: null }).where(eq(supportMessages.userId, userId));
-      // a staff member's name or phone on the orders they moved along goes too
+      // their name or phone on order history (old actor columns, no longer written) goes too
       await tx.update(orderEvents).set({ actorUserId: null, actorLabel: null }).where(eq(orderEvents.actorUserId, userId));
       const now = new Date();
       await tx

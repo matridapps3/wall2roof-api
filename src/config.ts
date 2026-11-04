@@ -54,11 +54,17 @@ const schema = z.object({
   /** `off` stops the background job that copies outside images onto this server. */
   IMAGE_IMPORT: z.enum(['on', 'off']).default('on'),
   /**
-   * Email alerts to staff (new orders, Contact us messages) through Resend's HTTPS API — Railway
-   * blocks SMTP. ALERT_EMAIL_TO is comma-separated. Key or recipients unset = no email.
+   * Email alerts to staff (new orders, Contact us messages) over HTTPS — Railway blocks SMTP.
+   * Either Resend's API (RESEND_API_KEY; MAIL_FROM is its sender), or the mail relay on the
+   * Wall2Roof app (MAIL_RELAY_URL, https only, and MAIL_RELAY_KEY = its ELECTRODASH_API_KEY), which
+   * sends from its own mailbox. Resend wins when both are set. ALERT_EMAIL_TO is comma-separated.
+   * Neither set up, or no recipients = no email.
    */
   RESEND_API_KEY: z.string().optional(),
   MAIL_FROM: z.string().default('ElectroDash <onboarding@resend.dev>'),
+  // checked where it's used (mailer.ts): a typo here turns staff email off instead of stopping the server
+  MAIL_RELAY_URL: z.string().optional(),
+  MAIL_RELAY_KEY: z.string().optional(),
   ALERT_EMAIL_TO: z.string().optional(),
 });
 
