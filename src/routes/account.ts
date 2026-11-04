@@ -327,7 +327,15 @@ export async function accountRoutes(app: FastifyInstance, { db, voice, mailer }:
           .where(and(isNull(supportMessages.userId), gt(supportMessages.createdAt, new Date(Date.now() - 86_400_000))));
     // email it to staff (Reply goes to the customer's email when they gave one)
     if (n <= ANON_SUPPORT_EMAILS_PER_DAY) {
-      alertStaff(mailer, () => supportMail(msg), (err) => req.log.error({ err }, 'support email failed'));
+      alertStaff(
+        mailer,
+        async () => {
+          // the account's own name (staff see who wrote, not an id)
+          const [u] = userId ? await db.select({ name: users.name }).from(users).where(eq(users.id, userId)) : [];
+          return supportMail({ ...msg, accountName: u?.name ?? null });
+        },
+        (err) => req.log.error({ err }, 'support email failed'),
+      );
     }
     reply.status(201);
     return { ok: true };
