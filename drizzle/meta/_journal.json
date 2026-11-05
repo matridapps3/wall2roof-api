@@ -85,6 +85,13 @@
       "when": 1793696909979,
       "tag": "0011_staff_actor",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793792972570,
+      "tag": "0012_staff_accounts",
+      "breakpoints": true
     }
   ]
 }

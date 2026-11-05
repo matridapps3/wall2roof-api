@@ -6,6 +6,7 @@ import type { Db } from './db/client.js';
 import { HttpError, readAuth, sendError } from './http.js';
 import { ImageStore } from './lib/images.js';
 import { defaultMailer, type Mailer } from './lib/mailer.js';
+import { defaultPushSender, type PushSender } from './lib/push.js';
 import { VoiceStore } from './lib/voice.js';
 import { isTestLogin } from './lib/otp-sender.js';
 import { getSettings } from './lib/settings.js';
@@ -18,6 +19,7 @@ import { integrationRoutes } from './routes/integration.js';
 import { orderRoutes } from './routes/orders.js';
 import { pageRoutes } from './routes/pages.js';
 import { reviewRoutes } from './routes/reviews.js';
+import { staffRoutes } from './routes/staff.js';
 import { voiceRoutes } from './routes/voice.js';
 
 export type AppDeps = {
@@ -29,6 +31,8 @@ export type AppDeps = {
   voice?: VoiceStore;
   /** Staff email alerts; defaults to Resend or the Wall2Roof mail relay when set up with ALERT_EMAIL_TO (none in tests). */
   mailer?: Mailer | null;
+  /** "New order" pushes to the admin app; defaults to Expo's push service (none in tests). */
+  push?: PushSender | null;
 };
 
 export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: AppDeps = {}) {
@@ -38,7 +42,14 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
       : {
           level: config.isProd ? 'info' : 'debug',
           // Never log credentials, tokens or integration keys.
-          redact: ['req.headers.authorization', 'req.body.password', 'req.body.refreshToken', 'req.body.code'],
+          redact: [
+            'req.headers.authorization',
+            'req.body.password',
+            'req.body.currentPassword',
+            'req.body.newPassword',
+            'req.body.refreshToken',
+            'req.body.code',
+          ],
         },
     trustProxy: true,
     bodyLimit: 256 * 1024,
@@ -82,10 +93,12 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
   const voice = deps.voice ?? new VoiceStore(config.voiceDir);
   await voiceRoutes(app, { store: voice });
   const mailer = 'mailer' in deps ? deps.mailer : defaultMailer();
-  await orderRoutes(app, { db, voice, mailer });
+  const push = 'push' in deps ? deps.push : defaultPushSender();
+  await orderRoutes(app, { db, voice, mailer, push });
   await accountRoutes(app, { db, voice, mailer });
   await pageRoutes(app, { db });
   await reviewRoutes(app, { db });
+  await staffRoutes(app, { db });
   await integrationRoutes(app, { db, key: 'integrationKey' in deps ? deps.integrationKey : config.WALL2ROOF_ADMIN_KEY });
 
   return app;

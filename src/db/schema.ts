@@ -382,8 +382,12 @@ export const orderEvents = pgTable('order_events', {
     .references(() => orders.id, { onDelete: 'cascade' }),
   status: orderStatusEnum('status').notNull(),
   note: text('note'),
-  /** Unused (who changed the status): kept because these columns exist in the database. */
+  /** Unused (left from the customer-account staff role that was removed); always null. */
   actorUserId: integer('actor_user_id').references(() => users.id, { onDelete: 'set null' }),
+  /**
+   * Who changed the status from the admin app: the staff member's name at the time (null for the
+   * customer, Wall2Roof and the admin route). Shown only in the admin app, never to customers.
+   */
   actorLabel: text('actor_label'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -498,6 +502,65 @@ export const settings = pgTable('settings', {
   value: jsonb('value').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * The admin app's logins (the teammates who pick, pack and send out orders): separate from customer
+ * accounts. Owners also add and manage the team. Created with `npm run staff:owner` (the first owner)
+ * and then from the app.
+ */
+export const staffAccounts = pgTable(
+  'staff_accounts',
+  {
+    id: serial('id').primaryKey(),
+    /** lower-case, 3–32 of a-z 0-9 . _ - */
+    username: text('username').notNull(),
+    name: text('name').notNull(),
+    passwordHash: text('password_hash').notNull(),
+    role: text('role', { enum: ['owner', 'staff'] }).notNull().default('staff'),
+    /** false = can't log in, gets no order alerts (kept for the names on past order steps). */
+    active: boolean('active').notNull().default(true),
+    /** password attempts since the last right one (counted before each check); 5 wrong lock the account for 15 minutes */
+    failedLogins: integer('failed_logins').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true }),
+    lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex('staff_accounts_username_uq').on(t.username)],
+);
+
+/** Admin app logins (refresh tokens), kept like refresh_tokens: only the SHA-256 is stored. */
+export const staffSessions = pgTable(
+  'staff_sessions',
+  {
+    id: serial('id').primaryKey(),
+    staffId: integer('staff_id')
+      .notNull()
+      .references(() => staffAccounts.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    /** The token handed out in exchange for this one (see refresh_tokens.replaced_by_id). */
+    replacedById: integer('replaced_by_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('staff_sessions_token_hash_uq').on(t.tokenHash), index('staff_sessions_staff_idx').on(t.staffId)],
+);
+
+/** The admin app's Expo push tokens, for the "New order" notification. One phone = one token, bound to whoever logged in last. */
+export const staffPushTokens = pgTable(
+  'staff_push_tokens',
+  {
+    id: serial('id').primaryKey(),
+    staffId: integer('staff_id')
+      .notNull()
+      .references(() => staffAccounts.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    platform: text('platform', { enum: ['android', 'ios'] }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('staff_push_tokens_token_uq').on(t.token), index('staff_push_tokens_staff_idx').on(t.staffId)],
+);
 
 export const productsRelations = relations(products, ({ one }) => ({
   brand: one(brands, { fields: [products.brandId], references: [brands.id] }),

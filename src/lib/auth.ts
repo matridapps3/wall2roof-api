@@ -29,9 +29,37 @@ export async function verifyAccessToken(token: string): Promise<AccessClaims | n
   try {
     const { payload } = await jwtVerify(token, config.jwtSecret, { issuer: 'electrodash' });
     if (typeof payload.sub !== 'string') return null;
+    // customer logins carry no `typ`: an admin app login (typ: 'staff') is not a customer
+    if (payload.typ !== undefined) return null;
     // anything else, such as a login from when the `staff` role existed, is a customer
     const role = payload.role === 'admin' ? 'admin' : 'customer';
     return { sub: payload.sub, role };
+  } catch {
+    return null;
+  }
+}
+
+/** An admin app login: the staff account, its role and the session (staff_sessions row) it came from. */
+export type StaffClaims = { staffId: number; role: 'owner' | 'staff'; sessionId: number };
+
+/** Admin app access token: `typ: 'staff'` keeps it apart from customer tokens, which never work in its place (or the other way round). */
+export async function signStaffAccessToken(c: StaffClaims): Promise<string> {
+  return new SignJWT({ typ: 'staff', role: c.role, sid: c.sessionId })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(String(c.staffId))
+    .setIssuedAt()
+    .setExpirationTime(`${config.ACCESS_TOKEN_TTL_MIN}m`)
+    .setIssuer('electrodash')
+    .sign(config.jwtSecret);
+}
+
+export async function verifyStaffAccessToken(token: string): Promise<StaffClaims | null> {
+  try {
+    const { payload } = await jwtVerify(token, config.jwtSecret, { issuer: 'electrodash' });
+    if (payload.typ !== 'staff' || typeof payload.sub !== 'string' || typeof payload.sid !== 'number') return null;
+    const staffId = Number(payload.sub);
+    if (!Number.isInteger(staffId) || staffId <= 0) return null;
+    return { staffId, role: payload.role === 'owner' ? 'owner' : 'staff', sessionId: payload.sid };
   } catch {
     return null;
   }

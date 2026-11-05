@@ -23,6 +23,7 @@ import { categoriesOf } from '../lib/categories.js';
 import { findCoupon, isFirstOrder } from '../lib/checkout.js';
 import { alertStaff, newOrderMail, type Mailer } from '../lib/mailer.js';
 import { hasBlockedWords } from '../lib/moderation.js';
+import { pushNewOrder, type PushSender } from '../lib/push.js';
 import { MAX_TIP_PAISE, quote } from '../lib/pricing.js';
 import { ratingsForOrders, refreshProductRatings, type OrderRatings } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
@@ -158,7 +159,10 @@ const STATUS_COPY: Record<Status, string> = {
 /** A GST number: state code, PAN, entity number, "Z", check character. */
 export const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 
-export async function orderRoutes(app: FastifyInstance, { db, voice, mailer }: { db: Db; voice: VoiceStore; mailer?: Mailer | null }) {
+export async function orderRoutes(
+  app: FastifyInstance,
+  { db, voice, mailer, push }: { db: Db; voice: VoiceStore; mailer?: Mailer | null; push?: PushSender | null },
+) {
   app.post('/v1/orders', async (req, reply) => {
     const userId = requireUser(req);
     const body = parse(
@@ -343,6 +347,13 @@ export async function orderRoutes(app: FastifyInstance, { db, voice, mailer }: {
         return newOrderMail(out, u ?? { name: null, phone: null });
       },
       (err) => req.log.error({ err, order: out.number }, 'order email failed'),
+    );
+    // and tell the admin app's phones (same: once, in the background)
+    pushNewOrder(
+      db,
+      push,
+      { number: out.number, totalPaise: out.totalPaise, itemCount: out.itemCount, city: out.address.city, pincode: out.address.pincode },
+      (err) => req.log.error({ err, order: out.number }, 'new order push failed'),
     );
     reply.status(201);
     return out;
@@ -548,18 +559,20 @@ export async function loadStoreOrder(db: Db, number: string) {
 
 /**
  * Move an order to its next status (store/admin side). Shared by the admin
- * route and the Wall2Roof integration API so both follow the same rules:
- * only NEXT_STATUS moves, restock on cancel, COD marked paid on delivery,
- * an order event and a customer notification.
+ * route, the admin app (/v1/staff) and the Wall2Roof integration API so all
+ * follow the same rules: only NEXT_STATUS moves, restock on cancel, COD marked
+ * paid on delivery, an order event and a customer notification.
+ * `actorLabel`: who did it (the admin app's staff member), kept on the event
+ * for the admin app only — customers never see it.
  */
-export async function changeOrderStatus(db: Db, number: string, status: Exclude<Status, 'placed'>, note?: string) {
+export async function changeOrderStatus(db: Db, number: string, status: Exclude<Status, 'placed'>, note?: string, actorLabel?: string) {
   const [o] = await db.select().from(orders).where(eq(orders.number, number));
   if (!o) throw new HttpError(404, 'not_found', 'Order not found.');
   if (!NEXT_STATUS[o.status].includes(status)) {
     throw new HttpError(409, 'invalid_transition', `Can’t move an order from ${o.status} to ${status}.`);
   }
   if (status === 'cancelled') {
-    await cancelOrder(db, o, note ?? 'Cancelled by store');
+    await cancelOrder(db, o, note ?? 'Cancelled by store', actorLabel);
     return;
   }
   await db.transaction(async (tx) => {
@@ -573,7 +586,7 @@ export async function changeOrderStatus(db: Db, number: string, status: Exclude<
       .where(and(eq(orders.id, o.id), eq(orders.status, o.status)))
       .returning({ id: orders.id });
     if (!moved.length) throw changedMeanwhile();
-    await tx.insert(orderEvents).values({ orderId: o.id, status, note });
+    await tx.insert(orderEvents).values({ orderId: o.id, status, note, actorLabel: actorLabel ?? null });
     await tx.insert(notifications).values({
       userId: o.userId,
       kind: 'order',
@@ -586,8 +599,8 @@ export async function changeOrderStatus(db: Db, number: string, status: Exclude<
 /** Someone else (another phone, the customer, Wall2Roof) changed the order after it was checked. */
 const changedMeanwhile = () => new HttpError(409, 'invalid_transition', 'This order was just updated. Refresh and try again.');
 
-/** Cancel, restock, and record it. Paid online orders are marked for refund. */
-async function cancelOrder(db: Db, o: OrderRow, reason: string) {
+/** Cancel, restock, and record it (with who did it, from the admin app). Paid online orders are marked for refund. */
+async function cancelOrder(db: Db, o: OrderRow, reason: string, actorLabel?: string) {
   await db.transaction(async (tx) => {
     // only from the status that was checked, and before the restock: of two changes at once only
     // one goes through, so stock is never put back twice
@@ -612,7 +625,7 @@ async function cancelOrder(db: Db, o: OrderRow, reason: string) {
           .where(eq(products.id, i.productId));
       }
     }
-    await tx.insert(orderEvents).values({ orderId: o.id, status: 'cancelled', note: reason });
+    await tx.insert(orderEvents).values({ orderId: o.id, status: 'cancelled', note: reason, actorLabel: actorLabel ?? null });
     await tx.insert(notifications).values({ userId: o.userId, kind: 'order', title: `Order #${o.number} cancelled`, body: reason, orderId: o.id });
   });
 }

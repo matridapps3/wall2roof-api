@@ -21,8 +21,9 @@ export type DbHandle = { db: Db; close: () => Promise<void> };
 /**
  * Railway PostgreSQL in production (DATABASE_URL), embedded PGlite locally,
  * or an in-memory PGlite for tests. Both speak the same Postgres dialect.
+ * `migrate: false` leaves a DATABASE_URL database as it is (PGlite is always migrated).
  */
-export async function openDb(opts: { memory?: boolean } = {}): Promise<DbHandle> {
+export async function openDb(opts: { memory?: boolean; migrate?: boolean } = {}): Promise<DbHandle> {
   if (config.DATABASE_URL && !opts.memory) {
     const pool = new pg.Pool({
       connectionString: config.DATABASE_URL,
@@ -30,7 +31,7 @@ export async function openDb(opts: { memory?: boolean } = {}): Promise<DbHandle>
       ssl: config.DATABASE_URL.includes('sslmode=disable') ? false : undefined,
     });
     const db = drizzlePg(pool, { schema });
-    await migratePg(db, { migrationsFolder });
+    if (opts.migrate !== false) await migratePg(db, { migrationsFolder });
     return { db, close: () => pool.end() };
   }
   let client: PGlite;

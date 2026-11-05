@@ -118,7 +118,8 @@ export function alertStaff(mailer: Mailer | null | undefined, build: () => Alert
   void (async () => m.send({ to: config.alertEmailTo, ...(await build()) }))().catch(onError);
 }
 
-const rupees = (paise: number) =>
+/** "₹1,234" or "₹1,234.50" (Indian digit grouping). */
+export const rupees = (paise: number) =>
   `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: paise % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
 const ist = (at: string | Date) => `${new Date(at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST`;
 

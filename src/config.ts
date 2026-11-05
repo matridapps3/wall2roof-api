@@ -66,6 +66,12 @@ const schema = z.object({
   MAIL_RELAY_URL: z.string().optional(),
   MAIL_RELAY_KEY: z.string().optional(),
   ALERT_EMAIL_TO: z.string().optional(),
+  /**
+   * "New order" push notifications to the admin app go through Expo's push service and need no key.
+   * Set this only if "enhanced push security" is turned on for the admin app's Expo project
+   * (an access token from expo.dev → Access tokens).
+   */
+  EXPO_ACCESS_TOKEN: z.string().optional(),
 });
 
 // Treat blank lines in .env (e.g. `DATABASE_URL=`) as "not set".
