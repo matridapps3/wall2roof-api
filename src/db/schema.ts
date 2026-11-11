@@ -562,6 +562,22 @@ export const staffPushTokens = pgTable(
   (t) => [uniqueIndex('staff_push_tokens_token_uq').on(t.token), index('staff_push_tokens_staff_idx').on(t.staffId)],
 );
 
+/** The customer app's Expo push tokens, for order updates ("Out for delivery"). One phone = one token, bound to whoever logged in last. */
+export const userPushTokens = pgTable(
+  'user_push_tokens',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    platform: text('platform', { enum: ['android', 'ios'] }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('user_push_tokens_token_uq').on(t.token), index('user_push_tokens_user_idx').on(t.userId)],
+);
+
 export const productsRelations = relations(products, ({ one }) => ({
   brand: one(brands, { fields: [products.brandId], references: [brands.id] }),
   category: one(categories, { fields: [products.categoryId], references: [categories.id] }),

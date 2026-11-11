@@ -10,8 +10,16 @@ import { facetAndFilter, isFiltering, parsePicked } from '../lib/filters.js';
 import { htmlToText } from '../lib/html.js';
 import { reviewSummary } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
+import { buildOptions, optionValues } from '../lib/variant-options.js';
 
-const TAG_SKIP = /country|origin|warranty|dimension|size|brand|model|sku|hsn|weight|capacity|time|angle|lumen/i;
+// price, pack and series specs (e.g. Anchor's "Unit Sale Price 1058", "Standard Packing Quantity 10") read as bare numbers
+const TAG_SKIP = /country|origin|warranty|dimension|size|brand|model|sku|hsn|weight|capacity|time|angle|lumen|price|mrp|pack|quantity|qty|series/i;
+/** Specs never shown to customers: an imported "Unit Sale Price" is the MRP again and can contradict the real price. */
+const HIDDEN_SPECS = /price|\bmrp\b/i;
+
+export function publicSpecs(specs: Spec[]): Spec[] {
+  return specs.filter((s) => !HIDDEN_SPECS.test(s.label));
+}
 const TAG_PREFER = [/watt/i, /light colou?r|colou?r temp/i, /colou?r/i, /shape/i, /material/i, /bulb|base|head|type/i];
 
 /**
@@ -569,6 +577,21 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
       getSettings(db).then((s) => reviewSummary(db, p.id, { viewerId: req.auth ? Number(req.auth.sub) : null, words: s.writtenReviews })),
     ]);
 
+    // Size / colour / length options: products of the same brand and main category whose names match
+    // once their own option values are taken out (see lib/variant-options.ts)
+    const optionRows =
+      p.brandId != null && p.categoryId != null && Object.keys(optionValues(p.specs)).length
+        ? await db
+            .select({ id: products.id, slug: products.slug, name: products.name, specs: products.specs, pricePaise: products.pricePaise, stockQty: products.stockQty })
+            .from(products)
+            .where(and(eq(products.brandId, p.brandId), eq(products.categoryId, p.categoryId), eq(products.isActive, true), ne(products.id, p.id)))
+            .limit(300)
+        : [];
+    const options = buildOptions(
+      { id: p.id, slug: p.slug, name: p.name, specs: p.specs, pricePaise: p.pricePaise, inStock: p.stockQty > 0 },
+      optionRows.map((r) => ({ ...r, inStock: r.stockQty > 0 })),
+    );
+
     // A fresh pick on every visit (like Home's bestsellers), six each: two rows of three, like Blinkit's.
     // "Similar products": any 6 from the category; "Top products in this category": 6 of the rest, most
     // popular first.
@@ -594,7 +617,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
       brandLogoUrl: row.brandLogo,
       images: p.images,
       description: htmlToText(p.description),
-      specs: p.specs,
+      specs: publicSpecs(p.specs),
       returnable: p.returnable,
       returnDays: p.returnDays,
       category: row.categorySlug ? { slug: row.categorySlug, name: row.categoryName } : null,
@@ -605,6 +628,8 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         inStock: v.stockQty > 0,
         selected: v.id === p.id,
       })),
+      /** Wall2Roof-style options (Size, Colour, Length …) across sibling products; null when there are none */
+      options,
       /** "Similar products": 6 from the same category, a different pick each visit */
       related: similar.map(card),
       /** "Top products in this category": 6 more from the category, most popular first */

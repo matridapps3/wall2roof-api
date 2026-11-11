@@ -18,12 +18,14 @@ import {
   reviewReports,
   supportMessages,
   userBlocks,
+  userPushTokens,
   users,
   wishlist,
 } from '../db/schema.js';
 import { HttpError, idParam, parse, requireUser } from '../http.js';
 import { hashPassword, isStrongEnough, normalizeIndianMobile, PASSWORD_RULE } from '../lib/auth.js';
 import { alertStaff, supportMail, type Mailer } from '../lib/mailer.js';
+import { expoPushTokenSchema } from '../lib/staff-accounts.js';
 import { refreshProductRatings } from '../lib/reviews.js';
 import type { VoiceStore } from '../lib/voice.js';
 import { publicUser } from './auth.js';
@@ -129,8 +131,9 @@ export async function accountRoutes(app: FastifyInstance, { db, voice, mailer }:
       await tx.delete(cartItems).where(eq(cartItems.userId, userId));
       await tx.delete(wishlist).where(eq(wishlist.userId, userId));
       await tx.delete(notifications).where(eq(notifications.userId, userId));
-      // logs them out on every phone
+      // logs them out on every phone, and their phones get no more order updates
       await tx.delete(refreshTokens).where(eq(refreshTokens.userId, userId));
+      await tx.delete(userPushTokens).where(eq(userPushTokens.userId, userId));
       if (u.phone) await tx.delete(otpCodes).where(eq(otpCodes.phone, u.phone));
       await tx
         .update(orders)
@@ -155,6 +158,28 @@ export async function accountRoutes(app: FastifyInstance, { db, voice, mailer }:
   });
 
   // ---- Addresses ----
+  /**
+   * POST /v1/me/push-token — this phone gets the customer's order updates ("Out for delivery") as
+   * notifications. A phone belongs to whoever logged in on it last.
+   */
+  app.post('/v1/me/push-token', async (req) => {
+    const userId = requireUser(req);
+    const body = parse(z.object({ token: expoPushTokenSchema, platform: z.enum(['android', 'ios']) }), req.body);
+    await db
+      .insert(userPushTokens)
+      .values({ userId, token: body.token, platform: body.platform })
+      .onConflictDoUpdate({ target: userPushTokens.token, set: { userId, platform: body.platform, lastSeenAt: new Date() } });
+    return { ok: true };
+  });
+
+  /** DELETE /v1/me/push-token — no more order updates on this phone (logging out). */
+  app.delete('/v1/me/push-token', async (req) => {
+    const userId = requireUser(req);
+    const { token } = parse(z.object({ token: z.string().trim().min(1).max(200) }), req.body);
+    await db.delete(userPushTokens).where(and(eq(userPushTokens.token, token), eq(userPushTokens.userId, userId)));
+    return { ok: true };
+  });
+
   app.get('/v1/addresses', async (req) => {
     const userId = requireUser(req);
     const rows = await db

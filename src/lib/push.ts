@@ -2,11 +2,11 @@ import { and, eq, exists, gt, inArray, isNull } from 'drizzle-orm';
 
 import { config } from '../config.js';
 import type { Db } from '../db/client.js';
-import { staffAccounts, staffPushTokens, staffSessions } from '../db/schema.js';
+import { refreshTokens, staffAccounts, staffPushTokens, staffSessions, userPushTokens, users } from '../db/schema.js';
 import { rupees } from './mailer.js';
 
 /**
- * Push notifications to the admin app's phones through Expo's push service (it passes them on to
+ * Push notifications to the admin app's and the customer app's phones through Expo's push service (it passes them on to
  * Google / Apple). Plain HTTPS; EXPO_ACCESS_TOKEN only when "enhanced push security" is turned on
  * for the Expo project.
  */
@@ -22,7 +22,7 @@ export type PushMessage = {
   data: Record<string, unknown>;
   sound: 'default';
   priority: 'high';
-  /** the Android notification channel the admin app makes */
+  /** the Android notification channel the app makes ('orders' in both apps) */
   channelId: string;
 };
 /** Expo's answer per message, in the same order as the messages. */
@@ -129,6 +129,23 @@ export function newOrderPush(o: NewOrderPush, to: string): PushMessage {
 const gone = (t: PushTicket | undefined) => t?.status === 'error' && t.details?.error === 'DeviceNotRegistered';
 
 /**
+ * Sends the messages, then forgets the phones whose app was uninstalled (Expo answers
+ * DeviceNotRegistered); any other failure is thrown (only logged by the caller).
+ */
+async function deliver(sender: PushSender, messages: PushMessage[], forget: (tokens: string[]) => Promise<unknown>, what: string) {
+  if (!messages.length) return;
+  const tickets = await sender.send(messages);
+  const dead = messages.filter((_, i) => gone(tickets[i])).map((m) => m.to);
+  if (dead.length) await forget(dead);
+  const failed = tickets.filter((t) => t.status === 'error' && !gone(t));
+  if (failed.length) {
+    // Expo's error code first: its messages can name the push token
+    const why = [...new Set(failed.map((t) => (t.status === 'error' ? (t.details?.error ?? t.message ?? 'unknown') : '')))].join('; ');
+    throw new Error(`${failed.length} of ${messages.length} ${what} pushes failed: ${why.slice(0, 300)}`);
+  }
+}
+
+/**
  * Tells the phones of every active staff member who is still logged in somewhere about a new order, in
  * the background: never awaited, so the customer's order can't fail or wait on it. Phones whose app was
  * uninstalled (Expo answers DeviceNotRegistered) are forgotten; other failures are only logged.
@@ -154,16 +171,65 @@ export function pushNewOrder(db: Db, sender: PushSender | null | undefined, o: N
           ),
         ),
       );
-    if (!rows.length) return;
-    const messages = rows.map((r) => newOrderPush(o, r.token));
-    const tickets = await s.send(messages);
-    const dead = messages.filter((_, i) => gone(tickets[i])).map((m) => m.to);
-    if (dead.length) await db.delete(staffPushTokens).where(inArray(staffPushTokens.token, dead));
-    const failed = tickets.filter((t) => t.status === 'error' && !gone(t));
-    if (failed.length) {
-      // Expo's error code first: its messages can name the push token
-      const why = [...new Set(failed.map((t) => (t.status === 'error' ? (t.details?.error ?? t.message ?? 'unknown') : '')))].join('; ');
-      throw new Error(`${failed.length} of ${messages.length} new-order pushes failed: ${why.slice(0, 300)}`);
-    }
+    await deliver(
+      s,
+      rows.map((r) => newOrderPush(o, r.token)),
+      (dead) => db.delete(staffPushTokens).where(inArray(staffPushTokens.token, dead)),
+      'new-order',
+    );
   })().catch(onError);
+}
+
+/** An order of theirs that the shop moved along: "Out for delivery · #ED-2026-10042" / "Your order is on the way." */
+export type OrderUpdate = { userId: number; number: string; title: string; body: string };
+
+/** The customer's phone: the same words as on the app's Notifications page; tapping it opens the order. */
+export function orderUpdatePush(u: OrderUpdate, to: string): PushMessage {
+  return {
+    to,
+    title: u.title,
+    body: u.body,
+    data: { type: 'order_update', number: u.number },
+    sound: 'default',
+    priority: 'high',
+    channelId: 'orders',
+  };
+}
+
+/** How the order code reaches the customer's phones: the live sender, and where failures are logged. */
+export type CustomerPush = { sender: PushSender | null | undefined; onError: (err: unknown) => void };
+
+/**
+ * Tells the customer's phones (each one still logged in to their account) about an order update, in the
+ * background like pushNewOrder: the shop's status change never fails or waits on it.
+ */
+export function pushOrderUpdate(db: Db, push: CustomerPush | null | undefined, u: OrderUpdate) {
+  const s = push?.sender;
+  if (!s || !push) return;
+  void (async () => {
+    const now = new Date();
+    const rows = await db
+      .select({ token: userPushTokens.token })
+      .from(userPushTokens)
+      .innerJoin(users, eq(users.id, userPushTokens.userId))
+      .where(
+        and(
+          eq(userPushTokens.userId, u.userId),
+          isNull(users.deletedAt),
+          // logged out on every phone: no more alerts
+          exists(
+            db
+              .select({ id: refreshTokens.id })
+              .from(refreshTokens)
+              .where(and(eq(refreshTokens.userId, users.id), isNull(refreshTokens.revokedAt), gt(refreshTokens.expiresAt, now))),
+          ),
+        ),
+      );
+    await deliver(
+      s,
+      rows.map((r) => orderUpdatePush(u, r.token)),
+      (dead) => db.delete(userPushTokens).where(inArray(userPushTokens.token, dead)),
+      'order-update',
+    );
+  })().catch(push.onError);
 }

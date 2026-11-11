@@ -13,6 +13,7 @@
     "db:check": "tsx src/scripts/db-check.ts",
     "categories:create": "tsx src/scripts/create-categories.ts",
     "support:set": "tsx src/scripts/set-support-numbers.ts",
+    "delivery:set": "tsx src/scripts/set-delivery.ts",
     "staff:owner": "tsx src/scripts/staff-owner.ts"
   },
   "keywords": [],

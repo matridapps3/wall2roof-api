@@ -39,6 +39,19 @@ export type StoreSettings = FeeSettings & {
    * Turning it on also needs the app's rating box ("only our team sees this") and Terms changed back.
    */
   writtenReviews: boolean;
+  /**
+   * Delivery priced by driving distance (Google Maps) from the shop to the customer's pinned address:
+   * km × this rate. 0 = off (the flat deliveryFeePaise for everyone). freeDeliveryMinPaise still
+   * waives it, and addresses with no pin (or when Google can't answer) pay the flat fee.
+   */
+  deliveryPerKmPaise: number;
+  /** Lowest distance-based fee (0 = none). */
+  deliveryMinFeePaise: number;
+  /** Farthest delivery in km (0 = no limit); farther addresses can't order. */
+  deliveryMaxKm: number;
+  /** The shop's location, where every delivery starts (null = not set: the flat fee is used). */
+  storeLat: number | null;
+  storeLng: number | null;
 };
 
 export const DEFAULT_SETTINGS: StoreSettings = {
@@ -59,6 +72,11 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   latestAppVersion: '',
   latestAppUrl: '',
   writtenReviews: false,
+  deliveryPerKmPaise: 0,
+  deliveryMinFeePaise: 0,
+  deliveryMaxKm: 0,
+  storeLat: null,
+  storeLng: null,
 };
 
 export async function getSettings(db: Db): Promise<StoreSettings> {

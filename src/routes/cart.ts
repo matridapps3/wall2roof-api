@@ -16,6 +16,8 @@ const quoteBody = z.object({
   paymentMethod: z.enum(['cod', 'online']).nullish(),
   /** "Tip your delivery partner", up to ₹500 */
   tipPaise: z.number().int().min(0).max(MAX_TIP_PAISE).default(0),
+  /** the chosen delivery address, for the distance-based delivery fee (older apps leave it out) */
+  addressId: z.number().int().positive().nullish(),
 });
 
 async function serverCart(db: Db, userId: number) {
@@ -32,7 +34,14 @@ export async function cartRoutes(app: FastifyInstance, { db }: { db: Db }) {
   app.post('/v1/cart/quote', async (req) => {
     const body = parse(quoteBody, req.body);
     const userId = req.auth ? Number(req.auth.sub) : null;
-    return priceCart(db, { userId, lines: body.items, couponCode: body.couponCode, paymentMethod: body.paymentMethod, tipPaise: body.tipPaise });
+    return priceCart(db, {
+      userId,
+      lines: body.items,
+      couponCode: body.couponCode,
+      paymentMethod: body.paymentMethod,
+      tipPaise: body.tipPaise,
+      addressId: body.addressId,
+    });
   });
 
   app.get('/v1/cart', async (req) => {

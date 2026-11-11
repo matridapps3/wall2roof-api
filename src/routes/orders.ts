@@ -20,11 +20,12 @@ import {
 import { HttpError, parse, requireAdmin, requireUser } from '../http.js';
 import { normalizeIndianMobile } from '../lib/auth.js';
 import { categoriesOf } from '../lib/categories.js';
-import { findCoupon, isFirstOrder } from '../lib/checkout.js';
+import { findCoupon, getDistanceLookup, isFirstOrder } from '../lib/checkout.js';
+import { deliveryPricing } from '../lib/delivery-distance.js';
 import { alertStaff, newOrderMail, type Mailer } from '../lib/mailer.js';
 import { hasBlockedWords } from '../lib/moderation.js';
-import { pushNewOrder, type PushSender } from '../lib/push.js';
-import { MAX_TIP_PAISE, quote } from '../lib/pricing.js';
+import { pushNewOrder, pushOrderUpdate, type CustomerPush, type PushSender } from '../lib/push.js';
+import { MAX_TIP_PAISE, quote, rupees } from '../lib/pricing.js';
 import { ratingsForOrders, refreshProductRatings, type OrderRatings } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
 import { VOICE_ID_RE, type VoiceStore } from '../lib/voice.js';
@@ -156,6 +157,14 @@ const STATUS_COPY: Record<Status, string> = {
   cancelled: 'Order cancelled',
 };
 
+/** The line under the title on the customer's phone, for each move the shop makes. */
+const STATUS_PUSH: Record<Exclude<Status, 'placed' | 'cancelled'>, string> = {
+  confirmed: 'The shop has confirmed your order.',
+  packed: 'Your order is packed and will be on its way soon.',
+  out_for_delivery: 'Your order is on the way.',
+  delivered: 'Your order has been delivered. Thank you for shopping with ElectroDash.',
+};
+
 /** A GST number: state code, PAN, entity number, "Z", check character. */
 export const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 
@@ -186,6 +195,11 @@ export async function orderRoutes(
         /** a recording uploaded to /v1/voice-notes */
         voiceNoteId: z.string().regex(VOICE_ID_RE).nullish(),
         idempotencyKey: z.string().min(8).max(80),
+        /**
+         * The app showed the distance-based delivery fee on its bill (it sends the address with the
+         * quote). Older apps leave it out and keep the flat fee, so nobody pays more than they were shown.
+         */
+        distanceDelivery: z.boolean().optional(),
       }),
       req.body,
     );
@@ -226,6 +240,13 @@ export async function orderRoutes(
 
     const coupon = await findCoupon(db, body.couponCode);
     const first = await isFirstOrder(db, userId);
+    // the same distance-based delivery fee the checkout showed (flat fee when it can't be measured)
+    const delivery = body.distanceDelivery
+      ? await deliveryPricing(settings, addr, getDistanceLookup())
+      : { fees: settings, km: null, tooFar: null };
+    if (delivery.tooFar) {
+      throw new HttpError(400, 'too_far', `This address is ${delivery.tooFar.km} km away. We deliver up to ${delivery.tooFar.maxKm} km.`);
+    }
 
     const created = await db.transaction(async (tx) => {
       const cart = await tx.select().from(cartItems).where(eq(cartItems.userId, userId));
@@ -249,7 +270,7 @@ export async function orderRoutes(
       });
       const q = quote({
         lines,
-        fees: settings,
+        fees: delivery.fees,
         coupon,
         unknownCouponCode: body.couponCode && !coupon ? body.couponCode : null,
         paymentMethod: body.paymentMethod,
@@ -332,7 +353,7 @@ export async function orderRoutes(
         userId,
         kind: 'order',
         title: `Order #${numbered.number} placed`,
-        body: `${q.itemCount} item${q.itemCount === 1 ? '' : 's'} · ₹${(q.totalPaise / 100).toFixed(0)}`,
+        body: `${q.itemCount} item${q.itemCount === 1 ? '' : 's'} · ${rupees(q.totalPaise)}`,
         orderId: o.id,
       });
       return numbered;
@@ -537,7 +558,10 @@ export async function orderRoutes(
       }),
       req.body,
     );
-    await changeOrderStatus(db, number, body.status, body.note);
+    await changeOrderStatus(db, number, body.status, body.note, undefined, {
+      sender: push,
+      onError: (err) => req.log.error({ err, order: number }, 'order update push failed'),
+    });
     return { ok: true };
   });
 }
@@ -564,15 +588,25 @@ export async function loadStoreOrder(db: Db, number: string) {
  * paid on delivery, an order event and a customer notification.
  * `actorLabel`: who did it (the admin app's staff member), kept on the event
  * for the admin app only — customers never see it.
+ * `push`: also tell the customer's phones (in the background; it never fails the change).
  */
-export async function changeOrderStatus(db: Db, number: string, status: Exclude<Status, 'placed'>, note?: string, actorLabel?: string) {
+export async function changeOrderStatus(
+  db: Db,
+  number: string,
+  status: Exclude<Status, 'placed'>,
+  note?: string,
+  actorLabel?: string,
+  push?: CustomerPush | null,
+) {
   const [o] = await db.select().from(orders).where(eq(orders.number, number));
   if (!o) throw new HttpError(404, 'not_found', 'Order not found.');
   if (!NEXT_STATUS[o.status].includes(status)) {
     throw new HttpError(409, 'invalid_transition', `Can’t move an order from ${o.status} to ${status}.`);
   }
   if (status === 'cancelled') {
-    await cancelOrder(db, o, note ?? 'Cancelled by store', actorLabel);
+    const reason = note ?? 'Cancelled by store';
+    await cancelOrder(db, o, reason, actorLabel);
+    pushOrderUpdate(db, push, { userId: o.userId, number: o.number, title: `Order #${o.number} cancelled`, body: reason });
     return;
   }
   await db.transaction(async (tx) => {
@@ -594,6 +628,8 @@ export async function changeOrderStatus(db: Db, number: string, status: Exclude<
       orderId: o.id,
     });
   });
+  // once the change is saved, so a refused change never alerts anyone
+  pushOrderUpdate(db, push, { userId: o.userId, number: o.number, title: `${STATUS_COPY[status]} · #${o.number}`, body: STATUS_PUSH[status] });
 }
 
 /** Someone else (another phone, the customer, Wall2Roof) changed the order after it was checked. */

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import { orderItems, orders, staffAccounts, staffPushTokens, staffSessions, users } from '../db/schema.js';
 import { HttpError, idParam, parse } from '../http.js';
+import type { PushSender } from '../lib/push.js';
 import { hashPassword, newRefreshToken, sha256, signStaffAccessToken, verifyPassword, verifyStaffAccessToken } from '../lib/auth.js';
 import {
   expoPushTokenSchema,
@@ -199,7 +200,7 @@ async function staffOrder(db: Db, number: string) {
 
 const refreshBody = z.object({ refreshToken: z.string().min(20).max(200) });
 
-export async function staffRoutes(app: FastifyInstance, { db }: { db: Db }) {
+export async function staffRoutes(app: FastifyInstance, { db, push }: { db: Db; push?: PushSender | null }) {
   // ---- Logging in ----
 
   app.post('/v1/staff/auth/login', async (req) => {
@@ -419,7 +420,10 @@ export async function staffRoutes(app: FastifyInstance, { db }: { db: Db }) {
     );
     const note = body.note || undefined;
     if (body.status === 'cancelled' && !note) throw new HttpError(400, 'reason_required', 'Enter why the order is being cancelled.');
-    await changeOrderStatus(db, number, body.status, note, me.name);
+    await changeOrderStatus(db, number, body.status, note, me.name, {
+      sender: push,
+      onError: (err) => req.log.error({ err, order: number }, 'order update push failed'),
+    });
     return { ok: true, order: await staffOrder(db, number) };
   });
 

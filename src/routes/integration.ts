@@ -8,6 +8,7 @@ import type { Db } from '../db/client.js';
 import { brands, categories, orderItems, orders, productReviews, products, reviewReports, users, type Spec } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
 import { categoriesOf, inCategories, setProductCategories } from '../lib/categories.js';
+import type { PushSender } from '../lib/push.js';
 import { refreshProductRatings } from '../lib/reviews.js';
 import { changeOrderStatus, loadStoreOrder } from './orders.js';
 
@@ -182,7 +183,10 @@ function productOut(
   };
 }
 
-export async function integrationRoutes(app: FastifyInstance, { db, key }: { db: Db; key: string | null | undefined }) {
+export async function integrationRoutes(
+  app: FastifyInstance,
+  { db, key, push }: { db: Db; key: string | null | undefined; push?: PushSender | null },
+) {
   await app.register(
     async (scope) => {
       // This API answers {"error": "..."}; bad input is 422.
@@ -435,7 +439,10 @@ export async function integrationRoutes(app: FastifyInstance, { db, key }: { db:
           }),
           req.body,
         );
-        await changeOrderStatus(db, number, body.status, body.note || undefined);
+        await changeOrderStatus(db, number, body.status, body.note || undefined, undefined, {
+          sender: push,
+          onError: (err) => req.log.error({ err, order: number }, 'order update push failed'),
+        });
         return { ok: true };
       });
 

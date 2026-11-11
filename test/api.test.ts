@@ -497,5 +497,9 @@ describe('order lifecycle', () => {
 
     const notes = await call('GET', '/v1/notifications', undefined, token);
     expect(notes.body.notifications.length).toBeGreaterThan(3);
+    // the amount reads like the rest of the app (₹1,95,769, paise kept), not ₹195769
+    const placed = notes.body.notifications.find((x: any) => x.title === `Order #${n} placed`);
+    const total = (d.body.bill.totalPaise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    expect(placed.body).toBe(`2 items · ₹${total}`);
   });
 });

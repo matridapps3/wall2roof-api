@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type { Db } from '../db/client.js';
-import { otpCodes, refreshTokens, users } from '../db/schema.js';
+import { otpCodes, refreshTokens, userPushTokens, users } from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
 import {
   hashOtp,
@@ -196,11 +196,19 @@ export async function authRoutes(app: FastifyInstance, { db }: { db: Db }) {
   });
 
   app.post('/v1/auth/logout', async (req) => {
-    const { refreshToken } = parse(z.object({ refreshToken: z.string().min(20) }), req.body);
-    await db
+    const { refreshToken, pushToken } = parse(
+      z.object({ refreshToken: z.string().min(20), pushToken: z.string().trim().min(1).max(200).optional() }),
+      req.body,
+    );
+    const ended = await db
       .update(refreshTokens)
       .set({ revokedAt: new Date() })
-      .where(eq(refreshTokens.tokenHash, sha256(refreshToken)));
+      .where(eq(refreshTokens.tokenHash, sha256(refreshToken)))
+      .returning({ userId: refreshTokens.userId });
+    // this phone stops getting that customer's order updates
+    if (pushToken && ended[0]) {
+      await db.delete(userPushTokens).where(and(eq(userPushTokens.token, pushToken), eq(userPushTokens.userId, ended[0].userId)));
+    }
     return { ok: true };
   });
 }

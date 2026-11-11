@@ -14,6 +14,8 @@ import { accountRoutes } from './routes/account.js';
 import { authRoutes } from './routes/auth.js';
 import { cartRoutes } from './routes/cart.js';
 import { catalogRoutes } from './routes/catalog.js';
+import { geoRoutes } from './routes/geo.js';
+import { googleGeocoder, type Geocoder } from './lib/google-geocode.js';
 import { imageRoutes } from './routes/images.js';
 import { integrationRoutes } from './routes/integration.js';
 import { orderRoutes } from './routes/orders.js';
@@ -33,6 +35,8 @@ export type AppDeps = {
   mailer?: Mailer | null;
   /** "New order" pushes to the admin app; defaults to Expo's push service (none in tests). */
   push?: PushSender | null;
+  /** Google Maps addresses (Geocoding API); defaults to GOOGLE_MAPS_SERVER_KEY. */
+  geocoder?: Geocoder;
 };
 
 export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: AppDeps = {}) {
@@ -98,8 +102,9 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
   await accountRoutes(app, { db, voice, mailer });
   await pageRoutes(app, { db });
   await reviewRoutes(app, { db });
-  await staffRoutes(app, { db });
-  await integrationRoutes(app, { db, key: 'integrationKey' in deps ? deps.integrationKey : config.WALL2ROOF_ADMIN_KEY });
+  await geoRoutes(app, { geocoder: deps.geocoder ?? googleGeocoder(config.GOOGLE_MAPS_SERVER_KEY) });
+  await staffRoutes(app, { db, push });
+  await integrationRoutes(app, { db, push, key: 'integrationKey' in deps ? deps.integrationKey : config.WALL2ROOF_ADMIN_KEY });
 
   return app;
 }

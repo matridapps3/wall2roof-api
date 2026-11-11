@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cardTags } from '../src/routes/catalog.js';
+import { cardTags, publicSpecs } from '../src/routes/catalog.js';
 
 const spec = (label: string, value: string) => ({ label, value });
 
@@ -26,6 +26,17 @@ describe('card tag chips', () => {
         spec('Body Color', 'Black'),
       ]),
     ).toEqual(['Black']);
+  });
+
+  it('skips price, pack and series specs that read as bare numbers (Anchor)', () => {
+    const anchor = [
+      spec('Product Types', 'Dimmers'),
+      spec('Unit Sale Price', '1058'),
+      spec('Standard Packing Quantity', '10'),
+      spec('Series', 'Roma Classic'),
+    ];
+    expect(cardTags(anchor)).toEqual(['Dimmers']);
+    expect(publicSpecs(anchor).map((s) => s.label)).toEqual(['Product Types', 'Standard Packing Quantity', 'Series']);
   });
 
   it('never repeats a value and returns nothing when there is nothing short', () => {

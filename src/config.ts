@@ -43,6 +43,11 @@ const schema = z.object({
    */
   WALL2ROOF_ADMIN_KEY: z.string().optional(),
   /**
+   * Google Maps Platform key with the Routes API on, for the driving distance from the shop to the
+   * customer (per-km delivery fee). Unset = the flat delivery fee is used.
+   */
+  GOOGLE_MAPS_SERVER_KEY: z.string().optional(),
+  /**
    * Where the server keeps its own copies of images. Default: the Railway volume
    * (RAILWAY_VOLUME_MOUNT_PATH/images, set by Railway when a volume is attached), else ./.data/images.
    */
