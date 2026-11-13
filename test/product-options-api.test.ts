@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { openDb, type DbHandle } from '../src/db/client.js';
 import { brands, categories, products } from '../src/db/schema.js';
-import { appOptions } from '../src/lib/product-groups.js';
+import { appOptions, sameSpelling } from '../src/lib/product-groups.js';
 
 const KEY = 'test-integration-key-0123456789-abcdefghij';
 let h: DbHandle;
@@ -147,6 +147,19 @@ describe('publishing a Wall2Roof SKU group', () => {
   it('refuses a group without options or SKUs', async () => {
     expect((await call('PUT', '/v1/integration/groups/44', { name: 'x', options: [], items: [{ sku: 'C1R' }] })).status).toBe(422);
     expect((await call('PUT', '/v1/integration/groups/44', { name: 'x', options: [{ key: 'mm' }], items: [] })).status).toBe(422);
+  });
+});
+
+describe('sameSpelling', () => {
+  it('makes values that differ only in capitals or spaces one choice, spelled as most products spell it', () => {
+    // Philips Full Glow: three say "Natural white", one "Natural White"; "CDL" is a different word and stays
+    const members = ['Natural white', 'Natural White', 'Natural white', 'Natural  white', 'CDL', 'Cool Day light'].map((light, i) => ({
+      values: { light, wattage: i % 2 ? '12W' : '12w' },
+    }));
+    sameSpelling(members, [{ key: 'light' }, { key: 'wattage' }]);
+    expect(members.map((m) => m.values.light)).toEqual(['Natural white', 'Natural white', 'Natural white', 'Natural white', 'CDL', 'Cool Day light']);
+    // a tie (3 and 3) goes to the one with more capitals
+    expect(new Set(members.map((m) => m.values.wattage))).toEqual(new Set(['12W']));
   });
 });
 

@@ -62,6 +62,36 @@ export function compareValues(a: string, b: string): number {
 const MAX_GROUP = 200;
 
 /**
+ * Values written differently only in capitals or spaces ("Natural white" / "Natural White") are one
+ * choice: every product gets the spelling most of them use (on a tie, the one with more capitals),
+ * so the same spelling shows on every page of the group.
+ */
+export function sameSpelling(members: { values: Record<string, string> }[], opts: { key: string }[]): void {
+  for (const { key } of opts) {
+    const spellings = new Map<string, Map<string, number>>();
+    for (const m of members) {
+      const v = m.values[key];
+      if (!v) continue;
+      const norm = v.toLowerCase().replace(/\s+/g, ' ');
+      const counts = spellings.get(norm) ?? new Map<string, number>();
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+      spellings.set(norm, counts);
+    }
+    const capitals = (s: string) => (s.match(/[A-Z]/g) ?? []).length;
+    const pick = new Map(
+      [...spellings].map(([norm, counts]) => [
+        norm,
+        [...counts].sort((a, b) => b[1] - a[1] || capitals(b[0]) - capitals(a[0]) || a[0].localeCompare(b[0]))[0][0],
+      ]),
+    );
+    for (const m of members) {
+      const v = m.values[key];
+      if (v) m.values[key] = pick.get(v.toLowerCase().replace(/\s+/g, ' '))!;
+    }
+  }
+}
+
+/**
  * The options on a product's page and the SKUs of its group (lower case; kept out of "Similar
  * products"). Only active products count; a group needs two of them, differing on at least one option.
  */
@@ -94,6 +124,7 @@ export async function groupOptionsFor(db: Db, p: { id: number; sku: string }): P
   });
   const current = members.find((m) => m.r.id === p.id);
   if (!current) return { options: null, groupSkus };
+  sameSpelling(members, opts);
 
   // Two products with exactly the same options can't be told apart: keep the open one, else the
   // in-stock / cheaper one.
