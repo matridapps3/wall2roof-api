@@ -1,11 +1,24 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-import { and, desc, eq, gte, ilike, inArray, isNotNull, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, inArray, isNotNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import type { Db } from '../db/client.js';
-import { brands, categories, orderItems, orders, productReviews, products, reviewReports, users, type Spec } from '../db/schema.js';
+import {
+  brands,
+  categories,
+  orderItems,
+  orders,
+  productGroupItems,
+  productGroups,
+  productReviews,
+  products,
+  reviewReports,
+  users,
+  type GroupOption,
+  type Spec,
+} from '../db/schema.js';
 import { HttpError, parse } from '../http.js';
 import { categoriesOf, inCategories, setProductCategories } from '../lib/categories.js';
 import type { PushSender } from '../lib/push.js';
@@ -309,6 +322,130 @@ export async function integrationRoutes(
           if (catIds) await setProductCategories(tx, id, catIds);
           return { ok: true, id, created: !existing };
         });
+      });
+
+      // ---- Product groups: Wall2Roof's SKU groups, published from its SKU Group screen ----
+      // A product in a published group shows the group's options (Size, Colour …) in the app.
+      scope.get('/groups', async () => {
+        const [groups, counts] = await Promise.all([
+          db.select().from(productGroups).orderBy(desc(productGroups.publishedAt)),
+          db
+            .select({
+              groupId: productGroupItems.groupId,
+              skus: sql<number>`count(*)::int`,
+              live: sql<number>`(count(*) filter (where ${products.isActive}))::int`,
+            })
+            .from(productGroupItems)
+            .leftJoin(products, sql`lower(${products.sku}) = ${productGroupItems.sku}`)
+            .groupBy(productGroupItems.groupId),
+        ]);
+        const byGroup = new Map(counts.map((c) => [c.groupId, c]));
+        return {
+          data: groups.map((g) => ({
+            id: g.sourceId,
+            name: g.name,
+            brand: g.brandName,
+            options: g.options,
+            skus: byGroup.get(g.id)?.skus ?? 0,
+            live: byGroup.get(g.id)?.live ?? 0,
+            source_updated_at: g.sourceUpdatedAt,
+            published_at: iso(g.publishedAt),
+          })),
+        };
+      });
+
+      /**
+       * Publish (or publish again) Wall2Roof SKU group :id — replaces the group's name, options and SKUs.
+       * A SKU that was in another published group moves to this one. Answers with what the app will show.
+       */
+      scope.put('/groups/:id', async (req) => {
+        const { id } = parse(z.object({ id: z.coerce.number().int().positive() }), req.params);
+        const body = parse(
+          z.object({
+            name: z.string().trim().min(1).max(200),
+            brand: z.string().trim().max(120).nullish(),
+            options: z
+              .array(z.object({ key: z.string().trim().min(1).max(100), name: z.string().trim().max(120).nullish() }))
+              .min(1)
+              .max(10),
+            items: z
+              .array(
+                z.object({
+                  sku: z.string().trim().min(1).max(100),
+                  values: z.record(z.string(), z.union([z.string(), z.number()]).nullish()).default({}),
+                }),
+              )
+              .min(1)
+              .max(2000),
+            /** the group's updated_at in Wall2Roof */
+            updated_at: z.string().trim().max(40).nullish(),
+          }),
+          req.body,
+        );
+        const options: GroupOption[] = [];
+        for (const o of body.options) if (!options.some((x) => x.key === o.key)) options.push({ key: o.key, name: o.name || o.key });
+        const items = new Map<string, { sku: string; values: Record<string, string> }>();
+        for (const it of body.items) {
+          const values: Record<string, string> = {};
+          for (const o of options) {
+            const v = it.values[o.key];
+            const text = v == null ? '' : String(v).trim().slice(0, 120);
+            if (text) values[o.key] = text;
+          }
+          items.set(it.sku.toLowerCase(), { sku: it.sku, values });
+        }
+        const skus = [...items.keys()];
+
+        const saved = await db.transaction(async (tx) => {
+          const [existing] = await tx.select({ id: productGroups.id }).from(productGroups).where(eq(productGroups.sourceId, id));
+          const fields = { name: body.name, brandName: body.brand || null, options, sourceUpdatedAt: body.updated_at || null, publishedAt: new Date() };
+          let groupId: number;
+          if (existing) {
+            await tx.update(productGroups).set(fields).where(eq(productGroups.id, existing.id));
+            groupId = existing.id;
+          } else {
+            [{ id: groupId }] = await tx.insert(productGroups).values({ sourceId: id, ...fields }).returning({ id: productGroups.id });
+          }
+          const moved = await tx
+            .selectDistinct({ name: productGroups.name })
+            .from(productGroupItems)
+            .innerJoin(productGroups, eq(productGroups.id, productGroupItems.groupId))
+            .where(and(inArray(productGroupItems.sku, skus), ne(productGroupItems.groupId, groupId)));
+          await tx.delete(productGroupItems).where(or(eq(productGroupItems.groupId, groupId), inArray(productGroupItems.sku, skus)));
+          const rows = skus.map((sku) => ({ groupId, sku, values: items.get(sku)!.values }));
+          for (let i = 0; i < rows.length; i += 500) await tx.insert(productGroupItems).values(rows.slice(i, i + 500));
+          return { created: !existing, movedFrom: moved.map((m) => m.name) };
+        });
+
+        const found = await db
+          .select({ sku: products.sku, isActive: products.isActive })
+          .from(products)
+          .where(inArray(sql`lower(${products.sku})`, skus));
+        const state = new Map(found.map((f) => [f.sku.toLowerCase(), f.isActive]));
+        const live = skus.filter((s) => state.get(s) === true).length;
+        return {
+          ok: true,
+          id,
+          created: saved.created,
+          skus: skus.length,
+          /** in ElectroDash and switched on: these show the options */
+          live,
+          /** not in ElectroDash yet (send the product first); they join the group once they arrive */
+          missing: skus.filter((s) => !state.has(s)).map((s) => items.get(s)!.sku),
+          /** in ElectroDash but switched off */
+          inactive: skus.filter((s) => state.get(s) === false).map((s) => items.get(s)!.sku),
+          /** the app shows options once at least two SKUs are live */
+          shown: live >= 2,
+          /** published groups these SKUs were taken out of */
+          moved_from: saved.movedFrom,
+        };
+      });
+
+      /** Unpublish: the group's products show no options any more. */
+      scope.delete('/groups/:id', async (req) => {
+        const { id } = parse(z.object({ id: z.coerce.number().int().positive() }), req.params);
+        const gone = await db.delete(productGroups).where(eq(productGroups.sourceId, id)).returning({ id: productGroups.id });
+        return { ok: true, deleted: gone.length > 0 };
       });
 
       // ---- Categories ----

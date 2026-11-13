@@ -578,6 +578,45 @@ export const userPushTokens = pgTable(
   (t) => [uniqueIndex('user_push_tokens_token_uq').on(t.token), index('user_push_tokens_user_idx').on(t.userId)],
 );
 
+/** One option of a published group, as Wall2Roof names it, e.g. { key: 'cable_length', name: 'Cable Length' }. */
+export type GroupOption = { key: string; name: string };
+
+/**
+ * Wall2Roof's SKU groups that were published to the app ("Publish" on Wall2Roof's SKU Group screen).
+ * A product in a published group shows the group's options (Size, Colour …) on its page.
+ */
+export const productGroups = pgTable(
+  'product_groups',
+  {
+    id: serial('id').primaryKey(),
+    /** Wall2Roof's SkuGroup id */
+    sourceId: integer('source_id').notNull(),
+    name: text('name').notNull(),
+    brandName: text('brand_name'),
+    /** the options shown, in Wall2Roof's order */
+    options: jsonb('options').$type<GroupOption[]>().notNull().default([]),
+    /** the group's updated_at in Wall2Roof when it was published, so Wall2Roof can tell "changed since publish" */
+    sourceUpdatedAt: text('source_updated_at'),
+    publishedAt: timestamp('published_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('product_groups_source_uq').on(t.sourceId)],
+);
+
+/** The SKUs of a published group with their option values. A SKU is in at most one group. */
+export const productGroupItems = pgTable(
+  'product_group_items',
+  {
+    groupId: integer('group_id')
+      .notNull()
+      .references(() => productGroups.id, { onDelete: 'cascade' }),
+    /** lower case, matched with lower(products.sku); the product may not be in ElectroDash yet */
+    sku: text('sku').notNull(),
+    /** this SKU's value for each option key, e.g. { mm: '1 mm²', colour: 'Red' } */
+    values: jsonb('values').$type<Record<string, string>>().notNull().default({}),
+  },
+  (t) => [uniqueIndex('product_group_items_sku_uq').on(t.sku), index('product_group_items_group_idx').on(t.groupId)],
+);
+
 export const productsRelations = relations(products, ({ one }) => ({
   brand: one(brands, { fields: [products.brandId], references: [brands.id] }),
   category: one(categories, { fields: [products.categoryId], references: [categories.id] }),

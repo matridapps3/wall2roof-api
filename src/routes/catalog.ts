@@ -10,7 +10,7 @@ import { facetAndFilter, isFiltering, parsePicked } from '../lib/filters.js';
 import { htmlToText } from '../lib/html.js';
 import { reviewSummary } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
-import { buildOptions, optionValues } from '../lib/variant-options.js';
+import { groupOptionsFor } from '../lib/product-groups.js';
 
 // price, pack and series specs (e.g. Anchor's "Unit Sale Price 1058", "Standard Packing Quantity 10") read as bare numbers
 const TAG_SKIP = /country|origin|warranty|dimension|size|brand|model|sku|hsn|weight|capacity|time|angle|lumen|price|mrp|pack|quantity|qty|series/i;
@@ -549,7 +549,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
     if (!row) throw new HttpError(404, 'not_found', 'This product is no longer available.');
     const p = row.p;
 
-    const [variants, sameCategory, bought, reviews] = await Promise.all([
+    const [variants, sameCategoryAll, bought, reviews, { options, groupSkus }] = await Promise.all([
       p.variantGroup
         ? db
             .select()
@@ -575,22 +575,11 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         : Promise.resolve([]),
       alsoBought(db, p, 6),
       getSettings(db).then((s) => reviewSummary(db, p.id, { viewerId: req.auth ? Number(req.auth.sub) : null, words: s.writtenReviews })),
+      // Size / colour / length options from the SKU group published from Wall2Roof (lib/product-groups.ts)
+      groupOptionsFor(db, p),
     ]);
-
-    // Size / colour / length options: products of the same brand and main category whose names match
-    // once their own option values are taken out (see lib/variant-options.ts)
-    const optionRows =
-      p.brandId != null && p.categoryId != null && Object.keys(optionValues(p.specs)).length
-        ? await db
-            .select({ id: products.id, slug: products.slug, name: products.name, specs: products.specs, pricePaise: products.pricePaise, stockQty: products.stockQty })
-            .from(products)
-            .where(and(eq(products.brandId, p.brandId), eq(products.categoryId, p.categoryId), eq(products.isActive, true), ne(products.id, p.id)))
-            .limit(300)
-        : [];
-    const options = buildOptions(
-      { id: p.id, slug: p.slug, name: p.name, specs: p.specs, pricePaise: p.pricePaise, inStock: p.stockQty > 0 },
-      optionRows.map((r) => ({ ...r, inStock: r.stockQty > 0 })),
-    );
+    // the product's own group is already in its options, so not in "Similar products" as well
+    const sameCategory = sameCategoryAll.filter((r) => !groupSkus.has(r.p.sku.toLowerCase()));
 
     // A fresh pick on every visit (like Home's bestsellers), six each: two rows of three, like Blinkit's.
     // "Similar products": any 6 from the category; "Top products in this category": 6 of the rest, most
@@ -601,7 +590,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
 
     // "Brands in this category", most products first (this product's brand counts too)
     const brandCount = new Map<string, { slug: string; name: string; logoUrl: string | null; count: number }>();
-    for (const r of [...sameCategory, { brandSlug: row.brandSlug, brandName: row.brandName, brandLogo: row.brandLogo }]) {
+    for (const r of [...sameCategoryAll, { brandSlug: row.brandSlug, brandName: row.brandName, brandLogo: row.brandLogo }]) {
       if (!r.brandSlug || !r.brandName) continue;
       const b = brandCount.get(r.brandSlug) ?? { slug: r.brandSlug, name: r.brandName, logoUrl: r.brandLogo ?? null, count: 0 };
       b.count++;
@@ -628,7 +617,7 @@ export async function catalogRoutes(app: FastifyInstance, { db }: { db: Db }) {
         inStock: v.stockQty > 0,
         selected: v.id === p.id,
       })),
-      /** Wall2Roof-style options (Size, Colour, Length …) across sibling products; null when there are none */
+      /** Size, Colour, Length … from the product's published Wall2Roof SKU group; null when it has none */
       options,
       /** "Similar products": 6 from the same category, a different pick each visit */
       related: similar.map(card),
