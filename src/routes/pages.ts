@@ -17,7 +17,7 @@ const BUSINESS = {
   grievanceOfficer: 'Vivek Kumar',
 };
 /** Shown at the top of the privacy policy; change it whenever the policy changes. */
-const POLICY_UPDATED = '3 November 2026';
+const POLICY_UPDATED = '16 November 2026';
 
 function page(title: string, body: string) {
   return `<!doctype html>
@@ -76,9 +76,10 @@ function privacyHtml(s: StoreSettings) {
   <li><strong>Delivery addresses:</strong> the addresses you save: receiver name and phone, house and building, area, landmark, city, state, PIN code, and the map location of the address when you pick it on the map.</li>
   <li><strong>Your orders:</strong> what you bought, prices, payment method, coupons, delivery instructions, the tip for the delivery partner, a GSTIN and business name if you add one, and the receiver’s name and phone if you order for someone else.</li>
   <li><strong>Voice instructions:</strong> if you press and hold <em>Record</em> at checkout, the recording is stored with that order so the delivery partner can play it.</li>
-  <li><strong>Ratings and reviews</strong> you write. Other customers see them with your first name and last initial.</li>
+  <li><strong>Ratings</strong> you give products you received (1 to 5 stars), with an optional note. Product pages show only the average rating and the number of ratings; your note is seen only by our team.</li>
   <li><strong>Messages you send us</strong> through Contact us.</li>
-  <li><strong>Location (only if you allow it):</strong> used while the app is open to fill in your address and check that we deliver there. We do not track your location in the background.</li>
+  <li><strong>Location (only if you allow it):</strong> used while the app is open to fill in your address, pin it on the map and check that we deliver there. We do not track your location in the background.</li>
+  <li><strong>Notifications (only if you allow them):</strong> a notification address for your phone (a push token), so we can tell you when your order is confirmed, on the way and delivered. Offers are sent only if you turn on offer alerts.</li>
   <li><strong>Microphone (only if you allow it):</strong> used only while you record a voice instruction or search by voice. Voice search is turned into text by your phone’s own speech service (from Apple or Google); we receive only the words.</li>
   <li><strong>Technical data:</strong> app version, device type, IP address and error logs, to keep the service working and secure.</li>
 </ul>
@@ -95,7 +96,7 @@ function privacyHtml(s: StoreSettings) {
 <h2>Who sees it</h2>
 <ul>
   <li><strong>Our store staff and delivery partners</strong> see what they need for your order: name, phone, address, items and delivery instructions.</li>
-  <li><strong>Service providers</strong> that run the app for us: cloud hosting and storage, the SMS service that sends login codes, the email service that sends our staff order alerts, and Expo (which delivers app updates). They may use the data only to provide their service to us.</li>
+  <li><strong>Service providers</strong> that run the app for us: cloud hosting and storage, the SMS service that sends login codes, the email service that sends our staff order alerts, Expo (which delivers app updates and passes order notifications to Apple’s and Google’s notification services), and Google Maps Platform (which finds the addresses you search for, the address at a map location, and the road distance for the delivery fee: it receives the text you type or the map location, not your name or phone number). They may use the data only to provide their service to us.</li>
   <li><strong>Authorities</strong>, when the law requires it.</li>
 </ul>
 
