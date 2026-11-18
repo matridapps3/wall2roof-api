@@ -22,6 +22,7 @@ import { orderRoutes } from './routes/orders.js';
 import { pageRoutes } from './routes/pages.js';
 import { reviewRoutes } from './routes/reviews.js';
 import { staffRoutes } from './routes/staff.js';
+import { trackRoutes } from './routes/track.js';
 import { voiceRoutes } from './routes/voice.js';
 
 export type AppDeps = {
@@ -101,6 +102,7 @@ export async function buildApp(db: Db, opts: FastifyServerOptions = {}, deps: Ap
   await orderRoutes(app, { db, voice, mailer, push });
   await accountRoutes(app, { db, voice, mailer });
   await pageRoutes(app, { db });
+  await trackRoutes(app, { db });
   await reviewRoutes(app, { db });
   await geoRoutes(app, { geocoder: deps.geocoder ?? googleGeocoder(config.GOOGLE_MAPS_SERVER_KEY) });
   await staffRoutes(app, { db, push });

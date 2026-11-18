@@ -28,6 +28,7 @@ import { pushNewOrder, pushOrderUpdate, type CustomerPush, type PushSender } fro
 import { MAX_TIP_PAISE, quote, rupees } from '../lib/pricing.js';
 import { ratingsForOrders, refreshProductRatings, type OrderRatings } from '../lib/reviews.js';
 import { getSettings, isServiceable } from '../lib/settings.js';
+import { trackPath } from '../lib/track-link.js';
 import { VOICE_ID_RE, type VoiceStore } from '../lib/voice.js';
 import { productCard } from './catalog.js';
 
@@ -142,6 +143,8 @@ async function detail(db: Db, o: OrderRow) {
     /** the recorded instruction's address on this server, e.g. /voice/12/<id>.m4a (null when none) */
     voiceNote: o.voiceNote ? `/voice/${o.voiceNote}` : null,
     timeline: events.map((e) => ({ status: e.status, at: e.createdAt.toISOString(), note: e.note })),
+    /** the page anyone can open to follow this order, e.g. /track/ED-2026-10018/<key> (null once cancelled) */
+    trackPath: o.status === 'cancelled' ? null : trackPath(o.number),
     canCancel: CANCELLABLE.includes(o.status),
     cancelReason: o.cancelReason,
     returns: returns.map((r) => ({ id: r.id, status: r.status, resolution: r.resolution, reason: r.reason })),

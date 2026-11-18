@@ -19,12 +19,16 @@ const BUSINESS = {
 /** Shown at the top of the privacy policy; change it whenever the policy changes. */
 const POLICY_UPDATED = '16 November 2026';
 
-function page(title: string, body: string) {
+/**
+ * A public web page. `extra`: more CSS, a script after the content, attributes on <main> and
+ * `private` (kept out of search engines, for pages only a link leads to).
+ */
+export function page(title: string, body: string, extra: { css?: string; script?: string; main?: string; private?: boolean } = {}) {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">${extra.private ? '\n<meta name="robots" content="noindex, nofollow">' : ''}
 <title>${esc(title)} · ElectroDash</title>
 <style>
   :root { --primary: #0B5FA5; --text: #1A2433; --muted: #5B6675; --line: #E3E8EF; --bg: #F5F7FA; --card: #FFFFFF; }
@@ -41,15 +45,15 @@ function page(title: string, body: string) {
   .muted { color: var(--muted); font-size: 14px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 16px 0; }
   a { color: var(--primary); }
-  footer { max-width: 760px; margin: 0 auto; padding: 0 16px 32px; }
+  footer { max-width: 760px; margin: 0 auto; padding: 0 16px 32px; }${extra.css ? `\n${extra.css}` : ''}
 </style>
 </head>
 <body>
 <header><a href="/support">ElectroDash</a></header>
-<main>
+<main${extra.main ? ` ${extra.main}` : ''}>
 ${body}
 </main>
-<footer class="muted"><a href="/privacy">Privacy policy</a> · <a href="/support">Support</a> · <a href="/delete-account">Delete account</a></footer>
+<footer class="muted"><a href="/privacy">Privacy policy</a> · <a href="/support">Support</a> · <a href="/delete-account">Delete account</a></footer>${extra.script ? `\n<script>${extra.script}</script>` : ''}
 </body>
 </html>`;
 }
